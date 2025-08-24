@@ -21,6 +21,9 @@ MODELS_DIR = PROJ_ROOT / "models"
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 
+PLANC2308_DIR = RAW_DATA_DIR / "PLANC2308"
+PLANC2308_SHP_FILE = PLANC2308_DIR / "PLANC2308.shp"
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
