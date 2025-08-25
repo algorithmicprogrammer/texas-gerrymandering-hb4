@@ -49,6 +49,7 @@
 </details>
 
 ## About the Project
+<img src="images/planc2335.png">
 
 ### Data
 <ul>
