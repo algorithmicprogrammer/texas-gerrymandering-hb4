@@ -49,7 +49,7 @@
 </details>
 
 ## About the Project
-<img src="images/planc2335.png">
+<a href="https://data.capitol.texas.gov/dataset/77a803d2-c443-411e-9e01-faae37f30b43/resource/532d076b-a63a-4350-9121-817dc5dbf449/download/planc2335.pdf"><img src="images/planc2335.png"></a>
 
 ### Data
 <ul>
