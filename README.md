@@ -28,7 +28,8 @@
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
-        <li><a href="#built-with">Technologies Used</a></li>
+        <li>Data</li>
+        <li><a href="#technologies-used">Technologies Used</a></li>
       </ul>
     </li>
     <li>
@@ -46,6 +47,12 @@
     <li><a href="#acknowledgments">Acknowledgments</a></li>
   </ol>
 </details>
+
+## Data
+<ul>
+  <li>Texas Legislative Council Congressional District Geospatial Data</li>
+</ul>
+
 
 ## Project Organization
 
