@@ -5,7 +5,7 @@
     <img src="images/logo.png" alt="Logo" width="80" height="80">
   </a>
 
-  <h3 align="center">Best-README-Template</h3>
+  <h3 align="center">A Quantitative Analysis of Negative Racial Gerrymandering in Texas</h3>
 
   <p align="center">
     An Illinois Institute of Technology study quantifying negative racial gerrymandering in Texas as a result of SB4.
@@ -28,8 +28,11 @@
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
-        <li>Data</li>
+        <li><a href="#data">Data</a></li>
+        
         <li><a href="#technologies-used">Technologies Used</a></li>
+        <img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python">
+        
       </ul>
     </li>
     <li>
@@ -48,10 +51,14 @@
   </ol>
 </details>
 
-## Data
+## About the Project
+
+### Data
 <ul>
   <li>Texas Legislative Council Congressional District Geospatial Data</li>
 </ul>
+
+### Technologies Used
 
 
 ## Project Organization
