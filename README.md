@@ -29,10 +29,7 @@
       <a href="#about-the-project">About The Project</a>
       <ul>
         <li><a href="#data">Data</a></li>
-        
         <li><a href="#technologies-used">Technologies Used</a></li>
-        <img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python">
-        
       </ul>
     </li>
     <li>
@@ -59,7 +56,10 @@
 </ul>
 
 ### Technologies Used
-
+<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python"></code> 
+<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/jupyter/jupyter-original-wordmark.svg" alt="jupyter"></code> 
+<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/markdown/markdown-original.svg" alt="markdown"></code>
+<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/latex/latex-original.svg" alt="latex"></code>
 
 ## Project Organization
 
