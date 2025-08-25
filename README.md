@@ -53,7 +53,11 @@
 
 ### Data
 <ul>
-  <li>Texas Legislative Council Congressional District Geospatial Data</li>
+  <li>
+  <a href="https://data.capitol.texas.gov/dataset/planc2335/resource/3552af40-54c1-45f2-9b02-b3c560bc0879">
+  Texas Legislative Council Congressional District Geospatial Data (PLANC2335 Shapefile)
+  </a>
+  </li>
 </ul>
 
 ### Technologies Used
