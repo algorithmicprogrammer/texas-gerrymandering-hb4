@@ -60,7 +60,7 @@
   </li>
   <li>
     <a href="https://data.capitol.texas.gov/dataset/77a803d2-c443-411e-9e01-faae37f30b43/resource/daa4eeb0-89f3-4dd9-a325-6f74d31447c3/download/planc2335r202.pdf">
-    Texas Legislative Council Congressional Districts PLANC2335 Population and Voter Data with Voter Registration Comparison
+    2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
   </li>
 
