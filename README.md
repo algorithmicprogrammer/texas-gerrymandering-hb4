@@ -59,9 +59,14 @@
     </a>
   </li>
   <li>
-    <a href="https://data.capitol.texas.gov/dataset/77a803d2-c443-411e-9e01-faae37f30b43/resource/daa4eeb0-89f3-4dd9-a325-6f74d31447c3/download/planc2335r202.pdf">
+    <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
     2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
+  </li>
+  <li>
+    <a href="https://api.census.gov/data/2020/dec/pl">
+    2020 Decennial Census Redistricting API
+    </a>  
   </li>
 
 </ul>
