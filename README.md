@@ -75,7 +75,10 @@
     <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
     2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
-      
+      <ul>
+        The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020 Decennial Censusu Redistricting API.
+        The census block geospatial data will be overlayed with the new district map's geospatial data to map racial composition in each congressional district.
+      </ul>
   </li>
  
 
