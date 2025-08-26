@@ -50,7 +50,7 @@
       <a href="#getting-started">Getting Started</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
+        <li><a href="#testing">Testing</a></li>
       </ul>
     </li>
     <li><a href="#usage">Usage</a></li>
@@ -130,7 +130,23 @@ With k-means clustering, we will partition congressional districts into k groups
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python"></code> 
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/jupyter/jupyter-original-wordmark.svg" alt="jupyter"></code> 
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/markdown/markdown-original.svg" alt="markdown"></code>
-<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/latex/latex-original.svg" alt="latex"></code>
+<code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/latex/latex-original.svg" alt="latex"></code> 
+
+## Getting Started
+### Prerequisites
+Install requirements:
+
+```
+pip install -r requirements.txt
+```
+
+### Testing
+Run the tests:
+```
+pytest tests
+```
+
+
 
 ## Project Organization
 
@@ -185,7 +201,7 @@ With k-means clustering, we will partition congressional districts into k groups
 
 ```
 ## Acknowledgements
-For academic citations, view the references folder. For software attributions and collaborator aknowledgements, view the acknowledgements folder.
+For citations, software attributions, and collaborator aknowledgements, view the acknowledgements folder.
 
 
 
