@@ -34,6 +34,7 @@
           <li><a href="#classification">Classification</a></li>
             <ul>
               <li><a href="#using-linear-regression-for-classification-with-one-hot-encoding">Using Linear Regression for Classification with One-Hot Encoding</a></li>
+              <li><a href="#using-logistic-regression-lda-and-random-forest-for-classification">Using Logistic Regression, LDA, and Random Forest for Classification</a></li>
             </ul>  
           </ul>  
         </li>
@@ -105,6 +106,15 @@
 #### Classification 
 ##### Using Linear Regression for Classification with One-Hot Encoding
 In our linear regression model, the dependent variable will be the partisan outcome in each Texas congressional district under the new redistricting map. The independent variables will be the district's racial demographics and party affiliation. If it is discovered upon comparing coefficients that racial minority demographics have massive weights independent of party affiliation, this will indicate negative racial gerrymandering.
+
+##### Using Logistic Regression, LDA, and Random Forest for Classification
+The following models will be trained:
+<ul>
+  <li>Determining partisan outcome in each Congressional District by compactness scores.</li>
+  <li>Determining partisan outcomes in each Congressional District by compactness scores and party affiliation.</li>
+  <li>Determining partisan outcomes in each Congressional District by compactness scores, party affiliation, and racial demographics.</li>
+</ul>
+If adding racial demographics features to the model drastically improves the model's performance, that is indicative of gerrymandering.
 
 ### Technologies Used
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python"></code> 
