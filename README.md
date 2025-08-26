@@ -62,17 +62,22 @@
         This shapefile contains the district geometries that will be compared against Census/election results data.
         </li>
       </ul>
+  </li> 
+  <li>
+    <a href="https://api.census.gov/data/2020/dec/pl">
+    2020 Decennial Census Redistricting PL-94-171 API
+    </a>  
   </li>
+    <ul>
+      <li>This API, provided by the U.S. Census Bureau, provides 2020 Texas voter age population breakdowns by race at the census-block level.</li>
+    </ul>
   <li>
     <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
     2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
+      
   </li>
-  <li>
-    <a href="https://api.census.gov/data/2020/dec/pl">
-    2020 Decennial Census Redistricting API
-    </a>  
-  </li>
+ 
 
 </ul>
 
