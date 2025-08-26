@@ -29,6 +29,14 @@
       <a href="#about-the-project">About The Project</a>
       <ul>
         <li><a href="#data-sources">Data Sources</a></li>
+        <li><a href="#machine-learning-models">Machine Learning Models</a>
+          <ul>
+          <li><a href="#classification">Classification</a></li>
+            <ul>
+              <li><a href="#using-linear-regression-for-classification-with-one-hot-encoding">Using Linear Regression for Classification with One-Hot Encoding</a></li>
+            </ul>  
+          </ul>  
+        </li>
         <li><a href="#technologies-used">Technologies Used</a></li>
       </ul>
     </li>
@@ -76,13 +84,26 @@
     2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
       <ul>
-        The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020 Decennial Censusu Redistricting API.
+        <li>
+        The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020 
+        Decennial Censusu Redistricting API.
         The census block geospatial data will be overlayed with the new district map's geospatial data to map racial composition in each congressional district.
+        </li>
       </ul>
   </li>
- 
-
+  <li>
+    <a href="https://data.capitol.texas.gov/dataset/comprehensive-election-datasets-compressed-format/resource/e1cd6332-6a7a-4c78-ad2a-852268f6c7a2">
+    Texas Legislative Council 2024 Voting Districts General Election Data  
+    </a>
+      <ul>
+        <li>Precinct-level election results data will be used to compute precinct-level votes by party.</li>
+      </ul>
+  </li>
 </ul>
+
+### Machine Learning Models
+#### Classification 
+##### Using Linear Regression for Classification with One-Hot Encoding
 
 ### Technologies Used
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python"></code> 
