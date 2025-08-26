@@ -102,7 +102,7 @@
     Texas Legislative Council 2024 Voting Districts General Election Data  
     </a>
       <ul>
-        <li>Precinct-level election results data will be used to compute precinct-level votes by party.</li>
+        <li>Precinct-level election results data will be used to compute precinct-level votes by party. This dataset will be used to quantify partisanship in congressional districts; unfortunately, Texas voter registration does not record party affiliation, so this dataset is our most reliable source of partisanship information.</li>
       </ul>
   </li>
 </ul>
