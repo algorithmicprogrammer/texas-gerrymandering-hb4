@@ -58,7 +58,9 @@
     Texas Legislative Council Congressional District Geospatial Data (PLANC2335 Shapefile)
     </a>
       <ul>
-        <li>The new district map's geospatial data is used for computing compactness scores, which are a widely-accepted indicator of gerrymandering.</li>
+        <li>The new district map's geospatial data is used for computing compactness scores, which are a widely-accepted indicator of gerrymandering.
+        This shapefile contains the district geometries that will be compared against Census/election results data.
+        </li>
       </ul>
   </li>
   <li>
