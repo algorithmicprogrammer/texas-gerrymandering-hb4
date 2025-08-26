@@ -104,6 +104,7 @@
 ### Machine Learning Models
 #### Classification 
 ##### Using Linear Regression for Classification with One-Hot Encoding
+In our linear regression model, the dependent variable will be the partisan outcome in each Texas congressional district under the new redistricting map. The independent variables will be the district's racial demographics and party affiliation. If it is discovered upon comparing coefficients that racial minority demographics have massive weights independent of party affiliation, this will indicate negative racial gerrymandering.
 
 ### Technologies Used
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python"></code> 
