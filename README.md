@@ -28,7 +28,7 @@
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
-        <li><a href="#data">Data</a></li>
+        <li><a href="#data-sources">Data Sources</a></li>
         <li><a href="#technologies-used">Technologies Used</a></li>
       </ul>
     </li>
@@ -51,12 +51,15 @@
 ## About the Project
 <a href="https://data.capitol.texas.gov/dataset/77a803d2-c443-411e-9e01-faae37f30b43/resource/532d076b-a63a-4350-9121-817dc5dbf449/download/planc2335.pdf"><img src="images/planc2335.png"></a>
 
-### Data
+### Data Sources
 <ul>
   <li>
     <a href="https://data.capitol.texas.gov/dataset/planc2335/resource/3552af40-54c1-45f2-9b02-b3c560bc0879">
     Texas Legislative Council Congressional District Geospatial Data (PLANC2335 Shapefile)
     </a>
+      <ul>
+        <li>The new district map's geospatial data is used for computing compactness scores, which are a widely-accepted indicator of gerrymandering.</li>
+      </ul>
   </li>
   <li>
     <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
