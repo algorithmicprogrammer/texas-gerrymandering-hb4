@@ -181,7 +181,11 @@ With k-means clustering, we will partition congressional districts into k groups
     │   └── train.py            <- Code to train models
     │
     └── plots.py                <- Code to create visualizations
-```
 
---------
+
+```
+## Acknowledgements
+For academic citations, view the references folder. For software attributions and collaborator aknowledgements, view the acknowledgements folder.
+
+
 
