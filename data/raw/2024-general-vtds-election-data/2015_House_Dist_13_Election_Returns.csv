@@ -1,0 +1,378 @@
+County,FIPS,VTD,cntyvtd,vtdkeyvalue,Office,Name,Party,Incumbent,Votes
+Austin,15,0101,150101,116,State Rep 13,Berger,R,N,18
+Austin,15,0102,150102,117,State Rep 13,Berger,R,N,21
+Austin,15,0103,150103,118,State Rep 13,Berger,R,N,20
+Austin,15,0104,150104,119,State Rep 13,Berger,R,N,11
+Austin,15,0205,150205,120,State Rep 13,Berger,R,N,32
+Austin,15,0206,150206,121,State Rep 13,Berger,R,N,15
+Austin,15,0207,150207,122,State Rep 13,Berger,R,N,4
+Austin,15,0208,150208,123,State Rep 13,Berger,R,N,4
+Austin,15,0309,150309,124,State Rep 13,Berger,R,N,20
+Austin,15,0310,150310,125,State Rep 13,Berger,R,N,19
+Austin,15,0311,150311,126,State Rep 13,Berger,R,N,5
+Austin,15,0412,150412,127,State Rep 13,Berger,R,N,3
+Austin,15,0413,150413,128,State Rep 13,Berger,R,N,9
+Austin,15,0414,150414,129,State Rep 13,Berger,R,N,6
+Austin,15,0415,150415,130,State Rep 13,Berger,R,N,8
+Austin,15,0101,150101,116,State Rep 13,Cerny Bilski,R,N,83
+Austin,15,0102,150102,117,State Rep 13,Cerny Bilski,R,N,84
+Austin,15,0103,150103,118,State Rep 13,Cerny Bilski,R,N,87
+Austin,15,0104,150104,119,State Rep 13,Cerny Bilski,R,N,48
+Austin,15,0205,150205,120,State Rep 13,Cerny Bilski,R,N,180
+Austin,15,0206,150206,121,State Rep 13,Cerny Bilski,R,N,101
+Austin,15,0207,150207,122,State Rep 13,Cerny Bilski,R,N,56
+Austin,15,0208,150208,123,State Rep 13,Cerny Bilski,R,N,42
+Austin,15,0309,150309,124,State Rep 13,Cerny Bilski,R,N,61
+Austin,15,0310,150310,125,State Rep 13,Cerny Bilski,R,N,180
+Austin,15,0311,150311,126,State Rep 13,Cerny Bilski,R,N,71
+Austin,15,0412,150412,127,State Rep 13,Cerny Bilski,R,N,42
+Austin,15,0413,150413,128,State Rep 13,Cerny Bilski,R,N,83
+Austin,15,0414,150414,129,State Rep 13,Cerny Bilski,R,N,90
+Austin,15,0415,150415,130,State Rep 13,Cerny Bilski,R,N,85
+Austin,15,0101,150101,116,State Rep 13,Schubert,R,N,52
+Austin,15,0102,150102,117,State Rep 13,Schubert,R,N,52
+Austin,15,0103,150103,118,State Rep 13,Schubert,R,N,52
+Austin,15,0104,150104,119,State Rep 13,Schubert,R,N,30
+Austin,15,0205,150205,120,State Rep 13,Schubert,R,N,145
+Austin,15,0206,150206,121,State Rep 13,Schubert,R,N,122
+Austin,15,0207,150207,122,State Rep 13,Schubert,R,N,76
+Austin,15,0208,150208,123,State Rep 13,Schubert,R,N,57
+Austin,15,0309,150309,124,State Rep 13,Schubert,R,N,21
+Austin,15,0310,150310,125,State Rep 13,Schubert,R,N,42
+Austin,15,0311,150311,126,State Rep 13,Schubert,R,N,16
+Austin,15,0412,150412,127,State Rep 13,Schubert,R,N,8
+Austin,15,0413,150413,128,State Rep 13,Schubert,R,N,25
+Austin,15,0414,150414,129,State Rep 13,Schubert,R,N,21
+Austin,15,0415,150415,130,State Rep 13,Schubert,R,N,17
+Austin,15,0101,150101,116,State Rep 13,Webster,D,N,9
+Austin,15,0102,150102,117,State Rep 13,Webster,D,N,10
+Austin,15,0103,150103,118,State Rep 13,Webster,D,N,10
+Austin,15,0104,150104,119,State Rep 13,Webster,D,N,4
+Austin,15,0205,150205,120,State Rep 13,Webster,D,N,25
+Austin,15,0206,150206,121,State Rep 13,Webster,D,N,13
+Austin,15,0207,150207,122,State Rep 13,Webster,D,N,3
+Austin,15,0208,150208,123,State Rep 13,Webster,D,N,4
+Austin,15,0309,150309,124,State Rep 13,Webster,D,N,4
+Austin,15,0310,150310,125,State Rep 13,Webster,D,N,22
+Austin,15,0311,150311,126,State Rep 13,Webster,D,N,6
+Austin,15,0412,150412,127,State Rep 13,Webster,D,N,2
+Austin,15,0413,150413,128,State Rep 13,Webster,D,N,7
+Austin,15,0414,150414,129,State Rep 13,Webster,D,N,12
+Austin,15,0415,150415,130,State Rep 13,Webster,D,N,14
+Burleson,51,0113,510113,1340,State Rep 13,Berger,R,N,3
+Burleson,51,0114,510114,1341,State Rep 13,Berger,R,N,3
+Burleson,51,0203,510203,1342,State Rep 13,Berger,R,N,0
+Burleson,51,0204,510204,1343,State Rep 13,Berger,R,N,1
+Burleson,51,0207,510207,1344,State Rep 13,Berger,R,N,1
+Burleson,51,0211,510211,1345,State Rep 13,Berger,R,N,4
+Burleson,51,0215,510215,1346,State Rep 13,Berger,R,N,0
+Burleson,51,0301,510301,1347,State Rep 13,Berger,R,N,3
+Burleson,51,0305,510305,1348,State Rep 13,Berger,R,N,4
+Burleson,51,0308,510308,1349,State Rep 13,Berger,R,N,1
+Burleson,51,0309,510309,1350,State Rep 13,Berger,R,N,6
+Burleson,51,0406,510406,1351,State Rep 13,Berger,R,N,0
+Burleson,51,0410,510410,1352,State Rep 13,Berger,R,N,2
+Burleson,51,0113,510113,1340,State Rep 13,Cerny Bilski,R,N,7
+Burleson,51,0114,510114,1341,State Rep 13,Cerny Bilski,R,N,15
+Burleson,51,0203,510203,1342,State Rep 13,Cerny Bilski,R,N,1
+Burleson,51,0204,510204,1343,State Rep 13,Cerny Bilski,R,N,1
+Burleson,51,0207,510207,1344,State Rep 13,Cerny Bilski,R,N,1
+Burleson,51,0211,510211,1345,State Rep 13,Cerny Bilski,R,N,7
+Burleson,51,0215,510215,1346,State Rep 13,Cerny Bilski,R,N,0
+Burleson,51,0301,510301,1347,State Rep 13,Cerny Bilski,R,N,9
+Burleson,51,0305,510305,1348,State Rep 13,Cerny Bilski,R,N,5
+Burleson,51,0308,510308,1349,State Rep 13,Cerny Bilski,R,N,1
+Burleson,51,0309,510309,1350,State Rep 13,Cerny Bilski,R,N,7
+Burleson,51,0406,510406,1351,State Rep 13,Cerny Bilski,R,N,7
+Burleson,51,0410,510410,1352,State Rep 13,Cerny Bilski,R,N,17
+Burleson,51,0113,510113,1340,State Rep 13,Schubert,R,N,36
+Burleson,51,0114,510114,1341,State Rep 13,Schubert,R,N,129
+Burleson,51,0203,510203,1342,State Rep 13,Schubert,R,N,26
+Burleson,51,0204,510204,1343,State Rep 13,Schubert,R,N,53
+Burleson,51,0207,510207,1344,State Rep 13,Schubert,R,N,23
+Burleson,51,0211,510211,1345,State Rep 13,Schubert,R,N,83
+Burleson,51,0215,510215,1346,State Rep 13,Schubert,R,N,5
+Burleson,51,0301,510301,1347,State Rep 13,Schubert,R,N,163
+Burleson,51,0305,510305,1348,State Rep 13,Schubert,R,N,28
+Burleson,51,0308,510308,1349,State Rep 13,Schubert,R,N,16
+Burleson,51,0309,510309,1350,State Rep 13,Schubert,R,N,54
+Burleson,51,0406,510406,1351,State Rep 13,Schubert,R,N,47
+Burleson,51,0410,510410,1352,State Rep 13,Schubert,R,N,86
+Burleson,51,0113,510113,1340,State Rep 13,Webster,D,N,1
+Burleson,51,0114,510114,1341,State Rep 13,Webster,D,N,20
+Burleson,51,0203,510203,1342,State Rep 13,Webster,D,N,1
+Burleson,51,0204,510204,1343,State Rep 13,Webster,D,N,3
+Burleson,51,0207,510207,1344,State Rep 13,Webster,D,N,11
+Burleson,51,0211,510211,1345,State Rep 13,Webster,D,N,14
+Burleson,51,0215,510215,1346,State Rep 13,Webster,D,N,0
+Burleson,51,0301,510301,1347,State Rep 13,Webster,D,N,18
+Burleson,51,0305,510305,1348,State Rep 13,Webster,D,N,12
+Burleson,51,0308,510308,1349,State Rep 13,Webster,D,N,7
+Burleson,51,0309,510309,1350,State Rep 13,Webster,D,N,11
+Burleson,51,0406,510406,1351,State Rep 13,Webster,D,N,19
+Burleson,51,0410,510410,1352,State Rep 13,Webster,D,N,28
+Colorado,89,0101,890101,1893,State Rep 13,Berger,R,N,6
+Colorado,89,0102,890102,1894,State Rep 13,Berger,R,N,4
+Colorado,89,0103,890103,1895,State Rep 13,Berger,R,N,0
+Colorado,89,0201,890201,1896,State Rep 13,Berger,R,N,22
+Colorado,89,0202,890202,1897,State Rep 13,Berger,R,N,1
+Colorado,89,0302,890302,1898,State Rep 13,Berger,R,N,3
+Colorado,89,0303,890303,1899,State Rep 13,Berger,R,N,1
+Colorado,89,0304,890304,1900,State Rep 13,Berger,R,N,4
+Colorado,89,0305,890305,1901,State Rep 13,Berger,R,N,7
+Colorado,89,0401,890401,1902,State Rep 13,Berger,R,N,0
+Colorado,89,0402,890402,1903,State Rep 13,Berger,R,N,3
+Colorado,89,0101,890101,1893,State Rep 13,Cerny Bilski,R,N,90
+Colorado,89,0102,890102,1894,State Rep 13,Cerny Bilski,R,N,12
+Colorado,89,0103,890103,1895,State Rep 13,Cerny Bilski,R,N,12
+Colorado,89,0201,890201,1896,State Rep 13,Cerny Bilski,R,N,78
+Colorado,89,0202,890202,1897,State Rep 13,Cerny Bilski,R,N,5
+Colorado,89,0302,890302,1898,State Rep 13,Cerny Bilski,R,N,31
+Colorado,89,0303,890303,1899,State Rep 13,Cerny Bilski,R,N,24
+Colorado,89,0304,890304,1900,State Rep 13,Cerny Bilski,R,N,32
+Colorado,89,0305,890305,1901,State Rep 13,Cerny Bilski,R,N,73
+Colorado,89,0401,890401,1902,State Rep 13,Cerny Bilski,R,N,12
+Colorado,89,0402,890402,1903,State Rep 13,Cerny Bilski,R,N,96
+Colorado,89,0101,890101,1893,State Rep 13,Schubert,R,N,19
+Colorado,89,0102,890102,1894,State Rep 13,Schubert,R,N,3
+Colorado,89,0103,890103,1895,State Rep 13,Schubert,R,N,1
+Colorado,89,0201,890201,1896,State Rep 13,Schubert,R,N,19
+Colorado,89,0202,890202,1897,State Rep 13,Schubert,R,N,2
+Colorado,89,0302,890302,1898,State Rep 13,Schubert,R,N,13
+Colorado,89,0303,890303,1899,State Rep 13,Schubert,R,N,10
+Colorado,89,0304,890304,1900,State Rep 13,Schubert,R,N,6
+Colorado,89,0305,890305,1901,State Rep 13,Schubert,R,N,19
+Colorado,89,0401,890401,1902,State Rep 13,Schubert,R,N,4
+Colorado,89,0402,890402,1903,State Rep 13,Schubert,R,N,8
+Colorado,89,0101,890101,1893,State Rep 13,Webster,D,N,27
+Colorado,89,0102,890102,1894,State Rep 13,Webster,D,N,1
+Colorado,89,0103,890103,1895,State Rep 13,Webster,D,N,0
+Colorado,89,0201,890201,1896,State Rep 13,Webster,D,N,15
+Colorado,89,0202,890202,1897,State Rep 13,Webster,D,N,3
+Colorado,89,0302,890302,1898,State Rep 13,Webster,D,N,5
+Colorado,89,0303,890303,1899,State Rep 13,Webster,D,N,6
+Colorado,89,0304,890304,1900,State Rep 13,Webster,D,N,3
+Colorado,89,0305,890305,1901,State Rep 13,Webster,D,N,19
+Colorado,89,0401,890401,1902,State Rep 13,Webster,D,N,2
+Colorado,89,0402,890402,1903,State Rep 13,Webster,D,N,16
+Fayette,149,0110,1490110,3604,State Rep 13,Berger,R,N,7
+Fayette,149,0112,1490112,3605,State Rep 13,Berger,R,N,13
+Fayette,149,0204,1490204,3606,State Rep 13,Berger,R,N,9
+Fayette,149,0207,1490207,3607,State Rep 13,Berger,R,N,23
+Fayette,149,0315,1490315,3608,State Rep 13,Berger,R,N,15
+Fayette,149,0316,1490316,3609,State Rep 13,Berger,R,N,45
+Fayette,149,0422,1490422,3610,State Rep 13,Berger,R,N,18
+Fayette,149,0423,1490423,3611,State Rep 13,Berger,R,N,16
+Fayette,149,0425,1490425,3612,State Rep 13,Berger,R,N,80
+Fayette,149,101N,149101N,3613,State Rep 13,Berger,R,N,23
+Fayette,149,201E,149201E,3614,State Rep 13,Berger,R,N,11
+Fayette,149,301W,149301W,3615,State Rep 13,Berger,R,N,30
+Fayette,149,0110,1490110,3604,State Rep 13,Cerny Bilski,R,N,21
+Fayette,149,0112,1490112,3605,State Rep 13,Cerny Bilski,R,N,32
+Fayette,149,0204,1490204,3606,State Rep 13,Cerny Bilski,R,N,61
+Fayette,149,0207,1490207,3607,State Rep 13,Cerny Bilski,R,N,86
+Fayette,149,0315,1490315,3608,State Rep 13,Cerny Bilski,R,N,17
+Fayette,149,0316,1490316,3609,State Rep 13,Cerny Bilski,R,N,59
+Fayette,149,0422,1490422,3610,State Rep 13,Cerny Bilski,R,N,18
+Fayette,149,0423,1490423,3611,State Rep 13,Cerny Bilski,R,N,35
+Fayette,149,0425,1490425,3612,State Rep 13,Cerny Bilski,R,N,80
+Fayette,149,101N,149101N,3613,State Rep 13,Cerny Bilski,R,N,60
+Fayette,149,201E,149201E,3614,State Rep 13,Cerny Bilski,R,N,55
+Fayette,149,301W,149301W,3615,State Rep 13,Cerny Bilski,R,N,73
+Fayette,149,0110,1490110,3604,State Rep 13,Schubert,R,N,8
+Fayette,149,0112,1490112,3605,State Rep 13,Schubert,R,N,19
+Fayette,149,0204,1490204,3606,State Rep 13,Schubert,R,N,48
+Fayette,149,0207,1490207,3607,State Rep 13,Schubert,R,N,73
+Fayette,149,0315,1490315,3608,State Rep 13,Schubert,R,N,14
+Fayette,149,0316,1490316,3609,State Rep 13,Schubert,R,N,34
+Fayette,149,0422,1490422,3610,State Rep 13,Schubert,R,N,9
+Fayette,149,0423,1490423,3611,State Rep 13,Schubert,R,N,21
+Fayette,149,0425,1490425,3612,State Rep 13,Schubert,R,N,37
+Fayette,149,101N,149101N,3613,State Rep 13,Schubert,R,N,34
+Fayette,149,201E,149201E,3614,State Rep 13,Schubert,R,N,36
+Fayette,149,301W,149301W,3615,State Rep 13,Schubert,R,N,41
+Fayette,149,0110,1490110,3604,State Rep 13,Webster,D,N,15
+Fayette,149,0112,1490112,3605,State Rep 13,Webster,D,N,22
+Fayette,149,0204,1490204,3606,State Rep 13,Webster,D,N,19
+Fayette,149,0207,1490207,3607,State Rep 13,Webster,D,N,32
+Fayette,149,0315,1490315,3608,State Rep 13,Webster,D,N,10
+Fayette,149,0316,1490316,3609,State Rep 13,Webster,D,N,18
+Fayette,149,0422,1490422,3610,State Rep 13,Webster,D,N,9
+Fayette,149,0423,1490423,3611,State Rep 13,Webster,D,N,15
+Fayette,149,0425,1490425,3612,State Rep 13,Webster,D,N,36
+Fayette,149,101N,149101N,3613,State Rep 13,Webster,D,N,44
+Fayette,149,201E,149201E,3614,State Rep 13,Webster,D,N,17
+Fayette,149,301W,149301W,3615,State Rep 13,Webster,D,N,38
+Grimes,185,0001,1850001,4066,State Rep 13,Berger,R,N,11
+Grimes,185,0002,1850002,4067,State Rep 13,Berger,R,N,4
+Grimes,185,0003,1850003,4068,State Rep 13,Berger,R,N,8
+Grimes,185,0004,1850004,4069,State Rep 13,Berger,R,N,4
+Grimes,185,0005,1850005,4070,State Rep 13,Berger,R,N,25
+Grimes,185,0006,1850006,4071,State Rep 13,Berger,R,N,28
+Grimes,185,0007,1850007,4072,State Rep 13,Berger,R,N,11
+Grimes,185,0008,1850008,4073,State Rep 13,Berger,R,N,3
+Grimes,185,0009,1850009,4074,State Rep 13,Berger,R,N,6
+Grimes,185,0010,1850010,4075,State Rep 13,Berger,R,N,1
+Grimes,185,0012,1850012,4076,State Rep 13,Berger,R,N,7
+Grimes,185,0014,1850014,4077,State Rep 13,Berger,R,N,10
+Grimes,185,0015,1850015,4078,State Rep 13,Berger,R,N,10
+Grimes,185,0001,1850001,4066,State Rep 13,Cerny Bilski,R,N,57
+Grimes,185,0002,1850002,4067,State Rep 13,Cerny Bilski,R,N,8
+Grimes,185,0003,1850003,4068,State Rep 13,Cerny Bilski,R,N,11
+Grimes,185,0004,1850004,4069,State Rep 13,Cerny Bilski,R,N,19
+Grimes,185,0005,1850005,4070,State Rep 13,Cerny Bilski,R,N,47
+Grimes,185,0006,1850006,4071,State Rep 13,Cerny Bilski,R,N,50
+Grimes,185,0007,1850007,4072,State Rep 13,Cerny Bilski,R,N,17
+Grimes,185,0008,1850008,4073,State Rep 13,Cerny Bilski,R,N,22
+Grimes,185,0009,1850009,4074,State Rep 13,Cerny Bilski,R,N,10
+Grimes,185,0010,1850010,4075,State Rep 13,Cerny Bilski,R,N,13
+Grimes,185,0012,1850012,4076,State Rep 13,Cerny Bilski,R,N,24
+Grimes,185,0014,1850014,4077,State Rep 13,Cerny Bilski,R,N,15
+Grimes,185,0015,1850015,4078,State Rep 13,Cerny Bilski,R,N,20
+Grimes,185,0001,1850001,4066,State Rep 13,Schubert,R,N,15
+Grimes,185,0002,1850002,4067,State Rep 13,Schubert,R,N,17
+Grimes,185,0003,1850003,4068,State Rep 13,Schubert,R,N,8
+Grimes,185,0004,1850004,4069,State Rep 13,Schubert,R,N,18
+Grimes,185,0005,1850005,4070,State Rep 13,Schubert,R,N,15
+Grimes,185,0006,1850006,4071,State Rep 13,Schubert,R,N,27
+Grimes,185,0007,1850007,4072,State Rep 13,Schubert,R,N,39
+Grimes,185,0008,1850008,4073,State Rep 13,Schubert,R,N,6
+Grimes,185,0009,1850009,4074,State Rep 13,Schubert,R,N,3
+Grimes,185,0010,1850010,4075,State Rep 13,Schubert,R,N,29
+Grimes,185,0012,1850012,4076,State Rep 13,Schubert,R,N,11
+Grimes,185,0014,1850014,4077,State Rep 13,Schubert,R,N,7
+Grimes,185,0015,1850015,4078,State Rep 13,Schubert,R,N,9
+Grimes,185,0001,1850001,4066,State Rep 13,Webster,D,N,21
+Grimes,185,0002,1850002,4067,State Rep 13,Webster,D,N,9
+Grimes,185,0003,1850003,4068,State Rep 13,Webster,D,N,33
+Grimes,185,0004,1850004,4069,State Rep 13,Webster,D,N,4
+Grimes,185,0005,1850005,4070,State Rep 13,Webster,D,N,13
+Grimes,185,0006,1850006,4071,State Rep 13,Webster,D,N,37
+Grimes,185,0007,1850007,4072,State Rep 13,Webster,D,N,13
+Grimes,185,0008,1850008,4073,State Rep 13,Webster,D,N,7
+Grimes,185,0009,1850009,4074,State Rep 13,Webster,D,N,5
+Grimes,185,0010,1850010,4075,State Rep 13,Webster,D,N,3
+Grimes,185,0012,1850012,4076,State Rep 13,Webster,D,N,19
+Grimes,185,0014,1850014,4077,State Rep 13,Webster,D,N,6
+Grimes,185,0015,1850015,4078,State Rep 13,Webster,D,N,12
+Lavaca,285,0101,2850101,6422,State Rep 13,Berger,R,N,22
+Lavaca,285,0102,2850102,6423,State Rep 13,Berger,R,N,26
+Lavaca,285,0119,2850119,6424,State Rep 13,Berger,R,N,12
+Lavaca,285,0208,2850208,6425,State Rep 13,Berger,R,N,31
+Lavaca,285,0223,2850223,6426,State Rep 13,Berger,R,N,11
+Lavaca,285,0231,2850231,6427,State Rep 13,Berger,R,N,23
+Lavaca,285,0309,2850309,6428,State Rep 13,Berger,R,N,12
+Lavaca,285,0311,2850311,6429,State Rep 13,Berger,R,N,17
+Lavaca,285,0329,2850329,6430,State Rep 13,Berger,R,N,14
+Lavaca,285,0416,2850416,6431,State Rep 13,Berger,R,N,19
+Lavaca,285,0430,2850430,6432,State Rep 13,Berger,R,N,16
+Lavaca,285,0101,2850101,6422,State Rep 13,Cerny Bilski,R,N,31
+Lavaca,285,0102,2850102,6423,State Rep 13,Cerny Bilski,R,N,41
+Lavaca,285,0119,2850119,6424,State Rep 13,Cerny Bilski,R,N,14
+Lavaca,285,0208,2850208,6425,State Rep 13,Cerny Bilski,R,N,22
+Lavaca,285,0223,2850223,6426,State Rep 13,Cerny Bilski,R,N,38
+Lavaca,285,0231,2850231,6427,State Rep 13,Cerny Bilski,R,N,31
+Lavaca,285,0309,2850309,6428,State Rep 13,Cerny Bilski,R,N,70
+Lavaca,285,0311,2850311,6429,State Rep 13,Cerny Bilski,R,N,9
+Lavaca,285,0329,2850329,6430,State Rep 13,Cerny Bilski,R,N,75
+Lavaca,285,0416,2850416,6431,State Rep 13,Cerny Bilski,R,N,7
+Lavaca,285,0430,2850430,6432,State Rep 13,Cerny Bilski,R,N,33
+Lavaca,285,0101,2850101,6422,State Rep 13,Schubert,R,N,9
+Lavaca,285,0102,2850102,6423,State Rep 13,Schubert,R,N,13
+Lavaca,285,0119,2850119,6424,State Rep 13,Schubert,R,N,6
+Lavaca,285,0208,2850208,6425,State Rep 13,Schubert,R,N,13
+Lavaca,285,0223,2850223,6426,State Rep 13,Schubert,R,N,8
+Lavaca,285,0231,2850231,6427,State Rep 13,Schubert,R,N,18
+Lavaca,285,0309,2850309,6428,State Rep 13,Schubert,R,N,9
+Lavaca,285,0311,2850311,6429,State Rep 13,Schubert,R,N,6
+Lavaca,285,0329,2850329,6430,State Rep 13,Schubert,R,N,6
+Lavaca,285,0416,2850416,6431,State Rep 13,Schubert,R,N,8
+Lavaca,285,0430,2850430,6432,State Rep 13,Schubert,R,N,17
+Lavaca,285,0101,2850101,6422,State Rep 13,Webster,D,N,4
+Lavaca,285,0102,2850102,6423,State Rep 13,Webster,D,N,6
+Lavaca,285,0119,2850119,6424,State Rep 13,Webster,D,N,0
+Lavaca,285,0208,2850208,6425,State Rep 13,Webster,D,N,6
+Lavaca,285,0223,2850223,6426,State Rep 13,Webster,D,N,11
+Lavaca,285,0231,2850231,6427,State Rep 13,Webster,D,N,8
+Lavaca,285,0309,2850309,6428,State Rep 13,Webster,D,N,6
+Lavaca,285,0311,2850311,6429,State Rep 13,Webster,D,N,3
+Lavaca,285,0329,2850329,6430,State Rep 13,Webster,D,N,6
+Lavaca,285,0416,2850416,6431,State Rep 13,Webster,D,N,14
+Lavaca,285,0430,2850430,6432,State Rep 13,Webster,D,N,6
+Washington,477,0101,4770101,9281,State Rep 13,Berger,R,N,7
+Washington,477,0104,4770104,9282,State Rep 13,Berger,R,N,9
+Washington,477,0109,4770109,9283,State Rep 13,Berger,R,N,7
+Washington,477,0115,4770115,9284,State Rep 13,Berger,R,N,6
+Washington,477,0117,4770117,9285,State Rep 13,Berger,R,N,0
+Washington,477,0121,4770121,9286,State Rep 13,Berger,R,N,0
+Washington,477,0202,4770202,9287,State Rep 13,Berger,R,N,0
+Washington,477,0203,4770203,9288,State Rep 13,Berger,R,N,25
+Washington,477,0205,4770205,9289,State Rep 13,Berger,R,N,17
+Washington,477,0208,4770208,9290,State Rep 13,Berger,R,N,9
+Washington,477,0307,4770307,9291,State Rep 13,Berger,R,N,9
+Washington,477,0311,4770311,9292,State Rep 13,Berger,R,N,13
+Washington,477,0312,4770312,9293,State Rep 13,Berger,R,N,16
+Washington,477,0320,4770320,9294,State Rep 13,Berger,R,N,24
+Washington,477,0406,4770406,9295,State Rep 13,Berger,R,N,11
+Washington,477,0410,4770410,9296,State Rep 13,Berger,R,N,6
+Washington,477,0413,4770413,9297,State Rep 13,Berger,R,N,15
+Washington,477,0418,4770418,9298,State Rep 13,Berger,R,N,3
+Washington,477,0419,4770419,9299,State Rep 13,Berger,R,N,4
+Washington,477,0101,4770101,9281,State Rep 13,Cerny Bilski,R,N,57
+Washington,477,0104,4770104,9282,State Rep 13,Cerny Bilski,R,N,63
+Washington,477,0109,4770109,9283,State Rep 13,Cerny Bilski,R,N,47
+Washington,477,0115,4770115,9284,State Rep 13,Cerny Bilski,R,N,25
+Washington,477,0117,4770117,9285,State Rep 13,Cerny Bilski,R,N,3
+Washington,477,0121,4770121,9286,State Rep 13,Cerny Bilski,R,N,2
+Washington,477,0202,4770202,9287,State Rep 13,Cerny Bilski,R,N,8
+Washington,477,0203,4770203,9288,State Rep 13,Cerny Bilski,R,N,90
+Washington,477,0205,4770205,9289,State Rep 13,Cerny Bilski,R,N,154
+Washington,477,0208,4770208,9290,State Rep 13,Cerny Bilski,R,N,89
+Washington,477,0307,4770307,9291,State Rep 13,Cerny Bilski,R,N,77
+Washington,477,0311,4770311,9292,State Rep 13,Cerny Bilski,R,N,69
+Washington,477,0312,4770312,9293,State Rep 13,Cerny Bilski,R,N,71
+Washington,477,0320,4770320,9294,State Rep 13,Cerny Bilski,R,N,113
+Washington,477,0406,4770406,9295,State Rep 13,Cerny Bilski,R,N,96
+Washington,477,0410,4770410,9296,State Rep 13,Cerny Bilski,R,N,64
+Washington,477,0413,4770413,9297,State Rep 13,Cerny Bilski,R,N,98
+Washington,477,0418,4770418,9298,State Rep 13,Cerny Bilski,R,N,42
+Washington,477,0419,4770419,9299,State Rep 13,Cerny Bilski,R,N,34
+Washington,477,0101,4770101,9281,State Rep 13,Schubert,R,N,39
+Washington,477,0104,4770104,9282,State Rep 13,Schubert,R,N,46
+Washington,477,0109,4770109,9283,State Rep 13,Schubert,R,N,34
+Washington,477,0115,4770115,9284,State Rep 13,Schubert,R,N,17
+Washington,477,0117,4770117,9285,State Rep 13,Schubert,R,N,1
+Washington,477,0121,4770121,9286,State Rep 13,Schubert,R,N,1
+Washington,477,0202,4770202,9287,State Rep 13,Schubert,R,N,9
+Washington,477,0203,4770203,9288,State Rep 13,Schubert,R,N,69
+Washington,477,0205,4770205,9289,State Rep 13,Schubert,R,N,126
+Washington,477,0208,4770208,9290,State Rep 13,Schubert,R,N,73
+Washington,477,0307,4770307,9291,State Rep 13,Schubert,R,N,63
+Washington,477,0311,4770311,9292,State Rep 13,Schubert,R,N,60
+Washington,477,0312,4770312,9293,State Rep 13,Schubert,R,N,61
+Washington,477,0320,4770320,9294,State Rep 13,Schubert,R,N,98
+Washington,477,0406,4770406,9295,State Rep 13,Schubert,R,N,83
+Washington,477,0410,4770410,9296,State Rep 13,Schubert,R,N,47
+Washington,477,0413,4770413,9297,State Rep 13,Schubert,R,N,82
+Washington,477,0418,4770418,9298,State Rep 13,Schubert,R,N,38
+Washington,477,0419,4770419,9299,State Rep 13,Schubert,R,N,32
+Washington,477,0101,4770101,9281,State Rep 13,Webster,D,N,27
+Washington,477,0104,4770104,9282,State Rep 13,Webster,D,N,70
+Washington,477,0109,4770109,9283,State Rep 13,Webster,D,N,22
+Washington,477,0115,4770115,9284,State Rep 13,Webster,D,N,35
+Washington,477,0117,4770117,9285,State Rep 13,Webster,D,N,4
+Washington,477,0121,4770121,9286,State Rep 13,Webster,D,N,4
+Washington,477,0202,4770202,9287,State Rep 13,Webster,D,N,1
+Washington,477,0203,4770203,9288,State Rep 13,Webster,D,N,34
+Washington,477,0205,4770205,9289,State Rep 13,Webster,D,N,27
+Washington,477,0208,4770208,9290,State Rep 13,Webster,D,N,17
+Washington,477,0307,4770307,9291,State Rep 13,Webster,D,N,23
+Washington,477,0311,4770311,9292,State Rep 13,Webster,D,N,10
+Washington,477,0312,4770312,9293,State Rep 13,Webster,D,N,13
+Washington,477,0320,4770320,9294,State Rep 13,Webster,D,N,20
+Washington,477,0406,4770406,9295,State Rep 13,Webster,D,N,16
+Washington,477,0410,4770410,9296,State Rep 13,Webster,D,N,13
+Washington,477,0413,4770413,9297,State Rep 13,Webster,D,N,22
+Washington,477,0418,4770418,9298,State Rep 13,Webster,D,N,7
+Washington,477,0419,4770419,9299,State Rep 13,Webster,D,N,6
+
