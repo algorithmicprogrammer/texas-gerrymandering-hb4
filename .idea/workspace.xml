@@ -4,12 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="1c026288-d40c-43f4-a9a5-38ccc3caef27" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/data/raw/PLANC2308/PLANC2308.cpg" beforeDir="false" afterPath="$PROJECT_DIR$/data/raw/PLANC2308/PLANC2308.cpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/raw/PLANC2308/PLANC2308.shp" beforeDir="false" afterPath="$PROJECT_DIR$/data/raw/PLANC2308/PLANC2308.shp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/raw/vtds_24pg/VTDs_24PG.cpg" beforeDir="false" afterPath="$PROJECT_DIR$/data/raw/vtds_24pg/VTDs_24PG.cpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/data/raw/vtds_24pg/VTDs_24PG.shp" beforeDir="false" afterPath="$PROJECT_DIR$/data/raw/vtds_24pg/VTDs_24PG.shp" afterDir="false" />
-    </list>
+    <list default="true" id="1c026288-d40c-43f4-a9a5-38ccc3caef27" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -134,7 +129,7 @@
       <workItem from="1756159653286" duration="8101000" />
       <workItem from="1757023681814" duration="4810000" />
       <workItem from="1757029315552" duration="1017000" />
-      <workItem from="1757031278211" duration="509000" />
+      <workItem from="1757031278211" duration="901000" />
     </task>
     <servers />
   </component>
