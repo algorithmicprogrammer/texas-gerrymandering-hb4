@@ -24,6 +24,9 @@ FIGURES_DIR = REPORTS_DIR / "figures"
 PLANC2308_DIR = RAW_DATA_DIR / "PLANC2308"
 PLANC2308_SHP_FILE = PLANC2308_DIR / "PLANC2308.shp"
 
+ELECTION_DATA_DIR = RAW_DATA_DIR / "2024-general-vtds-election-data"
+GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
