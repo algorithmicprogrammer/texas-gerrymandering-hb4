@@ -1,9 +1,12 @@
+pandas
+requests
 loguru
 mkdocs
-pip
 pytest
 python-dotenv
 ruff
 tqdm
 typer
+duckdb
 -e .
+
