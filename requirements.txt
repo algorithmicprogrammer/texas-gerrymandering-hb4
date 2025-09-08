@@ -1,3 +1,5 @@
+shapely
+geopandas
 pandas
 requests
 loguru
