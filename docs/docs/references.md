@@ -1,7 +1,6 @@
 # References
 
 - Bills Signed By Governor. (2025). Texas Legislature Online Reports. Retrieved September 2, 2025, from https://capitol.texas.gov/Reports/Report.aspx?LegSess=892&ID=signedbygov
-- Census Data API User Guide. (2025, January 16). United States Census Bureau. Retrieved August 31, 2025, from https://www2.census.gov/data/api-documentation/api-user-guide.pdf
 - Election Advisory No. 2020-05. (2020, February 11). Texas Secretary of State. Retrieved August 31, 2025, from https://www.sos.state.tx.us/elections/laws/advisory2020-05.shtml
 - Kaufman, A. R., King, G., & Komisarchik, M. (2021). How to Measure Legislative District Compactness If You Only Know It When You See It. American Journal of Political Science, 65(3), 533–550. https://doi.org/10.1111/ajps.12603
 - Menendian, S. (2023). Race and Politics: The Problem of Entanglement in Gerrymandering Cases. Southern California Law Review, 96(2), 301–354.
