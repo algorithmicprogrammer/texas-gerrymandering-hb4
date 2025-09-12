@@ -10,11 +10,9 @@
   <p align="center">
     An Illinois Institute of Technology study quantifying negative racial gerrymandering in Texas as a result of SB4.
     <br />
-    <a href=""><strong>Explore Publication »</strong></a>
+    <a href=""><strong>Explore Docs »</strong></a>
     <br />
     <br />
-    <a href="">Website</a>
-    &middot;
     <a href="https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
     &middot;
     <a href="https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
@@ -34,7 +32,7 @@
           <li><a href="#classification">Classification</a></li>
             <ul>
               <li><a href="#using-linear-regression-for-classification-with-one-hot-encoding">Using Linear Regression for Classification with One-Hot Encoding</a></li>
-              <li><a href="#using-logistic-regression-lda-and-random-forest-for-classification">Using Logistic Regression, LDA, and Random Forest for Classification</a></li>
+              <li><a href="#using-logistic-regression-lda-and-random-forest-for-classification">Random Forest</a></li>
           </ul>  
           <li><a href="#clustering">Clustering</a>
             <ul>
@@ -58,13 +56,13 @@
 </details>
 
 ## About the Project
-<a href="https://data.capitol.texas.gov/dataset/77a803d2-c443-411e-9e01-faae37f30b43/resource/532d076b-a63a-4350-9121-817dc5dbf449/download/planc2335.pdf"><img src="images/planc2335.png"></a>
+This experiment seeks to quantify negative racial gerrymandering in Texas after the 2025 mid-decade redistricting as a result of HB4. This will be accomplished by incorporating geospatial, racial demographic, and electoral data with machine learning methods. Upon combining the latest congressional district geospatial data, 2020 Texas U.S. Census block racial demographic data, 2020 Texas census block geospatial data, 2024 precinct-level election results, and 2024 Texas precinct geospatial data, we build a consolidated geospatial dataset which can be leveraged to perform a detailed analysis of congressional districts. Compactness scores (Polsby-Popper, Reock, Convex-Hull), which are widely-accepted indicators of gerrymandering, will be computed using the latest Texas congressional district map (PLANC2333). Classification models (linear regression, random forest) are applied to examine how large of an impact racial features have on Texas congressional district assignment. Additionally, a clustering model (k-means clustering) will be implemented to discern whether Texas congressional district groupings align predominantly with racial demographics. Our results will expose whether or not rampant negative racial gerrymandering is occurring in Texas at the moment. This study could also carry broader implementations, such as in methods for quantifying negative racial gerrymandering nationwide.
 
 ### Data Sources
 <ul>
   <li>
     <a href="https://data.capitol.texas.gov/dataset/planc2335/resource/3552af40-54c1-45f2-9b02-b3c560bc0879">
-    Texas Legislative Council Congressional District Geospatial Data (PLANC2335 Shapefile)
+    Texas Legislative Council Congressional District Geospatial Data (PLANC2333 Shapefile)
     </a>
       <ul>
         <li>The new district map's geospatial data is used for computing compactness scores, which are a widely-accepted indicator of gerrymandering.
