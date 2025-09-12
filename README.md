@@ -71,12 +71,12 @@ This experiment seeks to quantify negative racial gerrymandering in Texas after 
       </ul>
   </li> 
   <li>
-    <a href="https://api.census.gov/data/2020/dec/pl">
-    2020 Decennial Census Redistricting PL-94-171 API
+    <a href="https://redistrictingdatahub.org/data/about-our-data/pl-94171-dataset/">
+    2020 Decennial Census RPL-94-171 Dataset
     </a>  
   </li>
     <ul>
-      <li>This API, provided by the U.S. Census Bureau, provides 2020 Texas voter age population breakdowns by race at the census-block level.</li>
+      <li>This dataset, provided by Redistricting Data Hub, includes racial demogrpahics and population information from the 2020 Census.</li>
     </ul>
   <li>
     <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
@@ -105,7 +105,7 @@ This experiment seeks to quantify negative racial gerrymandering in Texas after 
       <ul>
         <li>
           The Texas voting district geospatial data for the 2024 elections will be joined with the voting district election results. The voting district geospatial data will then be overlayed with 
-          the new district map's geospatial data to map partisanship in each congressional district
+          the new district map's geospatial data to map partisanship in each congressional district.
         </li>  
       </ul>  
   </li>
@@ -114,14 +114,14 @@ This experiment seeks to quantify negative racial gerrymandering in Texas after 
 ### Machine Learning Models
 #### Classification 
 ##### Using Linear Regression for Classification with One-Hot Encoding
-In our linear regression model, the dependent variable will be the partisan outcome in each Texas congressional district under the new redistricting map. The independent variables will be the district's racial demographics and party affiliation. If it is discovered upon comparing coefficients that racial minority demographics have massive weights independent of party affiliation, this will indicate negative racial gerrymandering.
+In our linear regression model, the dependent variable will be the congressional district assignment. The independent variables will be the district's racial demographics and party affiliation. If it is discovered upon comparing coefficients that racial minority demographics have massive weights independent of party affiliation, this will indicate negative racial gerrymandering.
 
-##### Using Logistic Regression, LDA, and Random Forest for Classification
+##### Using Random Forest for Classification
 The following models will be trained:
 <ul>
-  <li>Determining partisan outcome in each Congressional District by compactness scores.</li>
-  <li>Determining partisan outcomes in each Congressional District by compactness scores and party affiliation.</li>
-  <li>Determining partisan outcomes in each Congressional District by compactness scores, party affiliation, and racial demographics.</li>
+  <li>Determining district assignment by compactness scores.</li>
+  <li>Determining district assignment by compactness scores and party affiliation.</li>
+  <li>Determining district assignment in each Congressional District by compactness scores, party affiliation, and racial demographics.</li>
 </ul>
 If adding racial demographics features to the model drastically improves the model's performance, that is indicative of gerrymandering.
 
@@ -137,17 +137,28 @@ With k-means clustering, we will partition congressional districts into k groups
 
 ## Getting Started
 ### Prerequisites
-Install requirements:
+1. Install git (Debian/Ubuntu).
+```
+sudo apt install git
+```
 
+### Installation
+1. Cloning the repository.
+```
+git clone https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4.git
+```
+
+2. Installing requirements.
 ```
 pip install -r requirements.txt
 ```
 
 ### Testing
-Run the tests:
+Run tests.
 ```
-pytest tests
+pytests test
 ```
+
 
 
 
