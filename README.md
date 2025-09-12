@@ -58,6 +58,10 @@
 ## About the Project
 This experiment seeks to quantify negative racial gerrymandering in Texas after the 2025 mid-decade redistricting as a result of HB4. This will be accomplished by incorporating geospatial, racial demographic, and electoral data with machine learning methods. Upon combining the latest congressional district geospatial data, 2020 Texas U.S. Census block racial demographic data, 2020 Texas census block geospatial data, 2024 precinct-level election results, and 2024 Texas precinct geospatial data, we build a consolidated geospatial dataset which can be leveraged to perform a detailed analysis of congressional districts. Compactness scores (Polsby-Popper, Reock, Convex-Hull), which are widely-accepted indicators of gerrymandering, will be computed using the latest Texas congressional district map (PLANC2333). Classification models (linear regression, random forest) are applied to examine how large of an impact racial features have on Texas congressional district assignment. Additionally, a clustering model (k-means clustering) will be implemented to discern whether Texas congressional district groupings align predominantly with racial demographics. Our results will expose whether or not rampant negative racial gerrymandering is occurring in Texas at the moment. This study could also carry broader implementations, such as in methods for quantifying negative racial gerrymandering nationwide.
 
+## Website
+https://texasracialgerrymanderingstudy.vercel.app/
+password: marisoliit
+
 ### Data Sources
 <ul>
   <li>
@@ -163,59 +167,47 @@ pytests test
 
 
 ## Project Organization
-
+## Project Organization
 ```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
-├── README.md          <- The top-level README for developers using this project.
+├── LICENSE
+├── Makefile
+├── README.md
 ├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
-│
-├── docs               <- A default mkdocs project; see www.mkdocs.org for details
-│
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
-├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-│                         the creator's initials, and a short `-` delimited description, e.g.
-│                         `1.0-jqp-initial-data-exploration`.
-│
-├── pyproject.toml     <- Project configuration file with package metadata for 
-│                         texas_gerrymandering_hb4 and configuration for tools like black
-│
-├── references         <- Data dictionaries, manuals, and all other explanatory materials.
-│
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-│                         generated with `pip freeze > requirements.txt`
-│
-├── setup.cfg          <- Configuration file for flake8
-│
-└── texas_gerrymandering_hb4   <- Source code for use in this project.
-    │
-    ├── __init__.py             <- Makes texas_gerrymandering_hb4 a Python module
-    │
-    ├── config.py               <- Store useful variables and configuration
-    │
-    ├── dataset.py              <- Scripts to download or generate data
-    │
-    ├── features.py             <- Code to create features for modeling
-    │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
-    │
-    └── plots.py                <- Code to create visualizations
-
-
+│   ├── interim
+│   ├── processed
+│   └── raw
+    │   ├── 2024-general-vtds-election-data  # precinct-level election results data
+    │   ├── PLANC2333    # congressional districts geospatial data 
+    │   ├── tl_2020_48_tabblock20    # census block geospatial data
+    │   └── vtds_24pg   # voting district geospatial data
+├── docs
+├── models
+├── notebooks
+│   ├── 01_clean_district_shpfile.ipynb    #cleaning PLANC233 District Geospatial Data
+│   ├── 02_clean_census_data.ipynb    #cleaning 2020 US Census Data
+│   ├── 03_clean_census_shpfile.ipynb    #cleaning geospatial data for census blocks
+│   ├── 04_clean_vtd_election_results.ipynb    #cleaning data for 2024 precinct-level election results
+│   └── 05_clean_vtd_shapefile.ipynb    #cleaning geospatial data for voting districts
+├── pyproject.toml
+├── references
+├── reports
+│   └── figures
+├── requirements.txt
+├── setup.cfg
+└── texas_gerrymandering_hb4
+    ├── __init__.py
+    ├── config.py
+    ├── dataset.py
+    ├── features.py
+    ├── modeling
+    │   ├── __init__.py
+    │   ├── predict.py
+    │   └── train.py
+    └── plots.py
 ```
-## Acknowledgments
-For citations, software attributions, and collaborator aknowledgements, view the acknowledgements folder.
+
+
+
 
 
 
