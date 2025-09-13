@@ -24,6 +24,9 @@ FIGURES_DIR = REPORTS_DIR / "figures"
 PLANC2333_DIR = RAW_DATA_DIR / "PLANC2333"
 PLANC2333_SHP_FILE = PLANC2333_DIR / "PLANC2333.shp"
 
+CENSUS_DEMOGRAPHICS_DIR = RAW_DATA_DIR / "tx_pl2020_official"
+CENSUS_DEMOGRAPHICS_TXT = CENSUS_DEMOGRAPHICS_DIR / "Blocks_Pop.txt"
+
 VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
 VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
 
@@ -32,7 +35,6 @@ CENSUS_DEMOGRAPHICS_DIR = RAW_DATA_DIR / "nhgis0001_csv"
 ELECTION_DATA_DIR = RAW_DATA_DIR / "2024-general-vtds-election-data"
 GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
 
-CENSUS_API_KEY = "770829dff88eb1d68b4a0fdaa1ec8f5127ff893c"
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
