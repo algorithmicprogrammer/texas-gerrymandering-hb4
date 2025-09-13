@@ -2,17 +2,18 @@
 
 ## Data Sources
 1. <a href="https://data.capitol.texas.gov/dataset/planc2333/resource/5712ebe1-d777-4d4a-b836-0534e17bca01">Texas Legislative Council Congressional District Geospatial Data</a>
-  * This is the geospatial data for PLANC2333, which was enacted by the 89th Legislature. 
-  * The new district map's geospatial data is used for computing compactness scores (Polsby-Popper, Reock, Convex-Hull), which are a widely-accepted indicator of gerrymandering.
+    * This is the geospatial data for PLANC2333, which was enacted by the 89th Legislature. 
+    * The new district map's geospatial data is used for computing compactness scores (Polsby-Popper, Reock, Convex-Hull), which are a widely-accepted indicator of gerrymandering.
             This shapefile contains the district geometries that will be compared against Census/election results data.
-  * The raw dataset has 38 rows (congressional districts) and 2 columns (district number and geospatial coordinates).
-  * The raw dataset is under the Creative Commons License (can be freely used, distributed, modified, and combined with other sources).
-2.  <a href="https://api.census.gov/data/2020/dec/pl">2020 Decennial Census Redistricting PL-94-171 API</a>
+    * The raw dataset has 38 rows (congressional districts) and 2 columns (district number and geospatial coordinates).
+    * The raw dataset is under the Creative Commons License (can be freely used, distributed, modified, and combined with other sources).
+2.  <a href="https://redistrictingdatahub.org/dataset/texas-block-block-group-cdp-city-county-and-tract-pl-94-171-2020-official/">2020 Decennial Census Redistricting PL-94-171 Dataset</a>
     *  This API, provided by the U.S. Census Bureau, provides 2020 Texas voter age population breakdowns by race at the census-block level.
 3.  <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">2020 Texas U.S. Census Blocks Geospatial Data</a>
     *  The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020
               Decennial Censusu Redistricting API.
               The census block geospatial data will be overlayed with the new district map's geospatial data to map racial composition in each congressional district.
+    * The raw dataset has 668,757 rows and 18 columns. There are 295,195 missing values in the UACE20 and UATYPE20 columns.
 4.  <a href="https://data.capitol.texas.gov/dataset/comprehensive-election-datasets-compressed-format/resource/e1cd6332-6a7a-4c78-ad2a-852268f6c7a2">Texas Legislative Council 2024 Voting Districts General Election Data</a>
     * Precinct-level election results data will be used to compute precinct-level votes by party. This dataset will be used to quantify partisanship in congressional districts; unfortunately, Texas voter registration does not record party affiliation, so this dataset is our most reliable source of partisanship information.
     * The raw dataset (2024_General_Election_Returns.csv) has 450,357 rows (candidate votes per precinct) and 10 columns (county, county code, VTD ID, county-VTD ID, VTD key, office, candidate name, candidate party, incumbent indicator, and votes).
