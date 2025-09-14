@@ -10,5 +10,6 @@ ruff
 tqdm
 typer
 duckdb
+pyarrow
 -e .
 
