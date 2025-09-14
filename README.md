@@ -59,8 +59,8 @@
 This experiment seeks to quantify negative racial gerrymandering in Texas after the 2025 mid-decade redistricting as a result of HB4. This will be accomplished by incorporating geospatial, racial demographic, and electoral data with machine learning methods. Upon combining the latest congressional district geospatial data, 2020 Texas U.S. Census block racial demographic data, 2020 Texas census block geospatial data, 2024 precinct-level election results, and 2024 Texas precinct geospatial data, we build a consolidated geospatial dataset which can be leveraged to perform a detailed analysis of congressional districts. Compactness scores (Polsby-Popper, Reock, Convex-Hull), which are widely-accepted indicators of gerrymandering, will be computed using the latest Texas congressional district map (PLANC2333). Classification models (linear regression, random forest) are applied to examine how large of an impact racial features have on Texas congressional district assignment. Additionally, a clustering model (k-means clustering) will be implemented to discern whether Texas congressional district groupings align predominantly with racial demographics. Our results will expose whether or not rampant negative racial gerrymandering is occurring in Texas at the moment. This study could also carry broader implementations, such as in methods for quantifying negative racial gerrymandering nationwide.
 
 ## Website
-https://texasracialgerrymanderingstudy.vercel.app/
-password: marisoliit
+<li>url: https://texasracialgerrymanderingstudy.vercel.app</li>
+<li>password: marisoliit</li>
 
 ### Data Sources
 <ul>
@@ -89,7 +89,7 @@ password: marisoliit
       <ul>
         <li>
         The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020 
-        Decennial Censusu Redistricting API.
+        Decennial Censusu Redistricting dataset.
         The census block geospatial data will be overlayed with the new district map's geospatial data to map racial composition in each congressional district.
         </li>
       </ul>
@@ -167,27 +167,30 @@ pytests test
 
 
 ## Project Organization
-## Project Organization
 ```
 ├── LICENSE
 ├── Makefile
 ├── README.md
+├── code
+│   ├── datasets
+    │   ├── 01_clean_district_shpfile.ipynb  # cleaning congressional district geospatial data
+    │   ├── 02_clean_census_data.ipynb    # cleaning Census racial demographics data 
+    │   ├── 03_clean_census_shpfile.ipynb    # cleaning census block geospatial data
+    │   ├── 04_clean_vtd_election_results.ipynb   # cleaning election results data
+    │   └── 05_clean_vtd_shpfile.ipynb   # cleaning precinct geospatial data
 ├── data
 │   ├── interim
+    │   ├── districts_clean.gpkg   # clean congressional district geospatial data
+    │   └── tx_pl94_clean.parquet   # clean Census racial demographics data
 │   ├── processed
 │   └── raw
     │   ├── 2024-general-vtds-election-data  # precinct-level election results data
     │   ├── PLANC2333    # congressional districts geospatial data 
     │   ├── tl_2020_48_tabblock20    # census block geospatial data
+    │   ├── tx_pl2020_official   # census racial demographics data
     │   └── vtds_24pg   # voting district geospatial data
 ├── docs
 ├── models
-├── notebooks
-│   ├── 01_clean_district_shpfile.ipynb    #cleaning PLANC233 District Geospatial Data
-│   ├── 02_clean_census_data.ipynb    #cleaning 2020 US Census Data
-│   ├── 03_clean_census_shpfile.ipynb    #cleaning geospatial data for census blocks
-│   ├── 04_clean_vtd_election_results.ipynb    #cleaning data for 2024 precinct-level election results
-│   └── 05_clean_vtd_shapefile.ipynb    #cleaning geospatial data for voting districts
 ├── pyproject.toml
 ├── references
 ├── reports
