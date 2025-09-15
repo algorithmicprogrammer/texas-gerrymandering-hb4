@@ -40,6 +40,7 @@ pytests test
 * pandas
 * geopandas
 * GeoJSON
+* *duckdb
 * GerryChain
 * Shapely
 * loguru
@@ -54,30 +55,26 @@ pytests test
 ├── LICENSE
 ├── Makefile
 ├── README.md
+├── code
+│   ├── datasets
+    │   ├── 01_clean_district_shpfile.ipynb  # cleaning congressional district geospatial data
+    │   ├── 02_clean_census_data.ipynb    # cleaning Census racial demographics data 
+    │   ├── 03_clean_census_shpfile.ipynb    # cleaning census block geospatial data
+    │   ├── 04_clean_vtd_election_results.ipynb   # cleaning election results data
+    │   └── 05_clean_vtd_shpfile.ipynb   # cleaning precinct geospatial data
 ├── data
 │   ├── interim
+    │   ├── districts_clean.gpkg   # clean congressional district geospatial data
+    │   └── tx_pl94_clean.parquet   # clean Census racial demographics data
 │   ├── processed
 │   └── raw
-    │   ├── 2024-general-vtds-election-data
-    │   ├── PLANC2335
-    │   └── vtds_24pg
+    │   ├── 2024-general-vtds-election-data  # precinct-level election results data
+    │   ├── PLANC2333    # congressional districts geospatial data 
+    │   ├── tl_2020_48_tabblock20    # census block geospatial data
+    │   ├── tx_pl2020_official   # census racial demographics data
+    │   └── vtds_24pg   # voting district geospatial data
 ├── docs
 ├── models
-│   ├── 01_classification_linear_regression.ipynb
-│   ├── 02_classification_logistic_regression.ipynb
-│   ├── 03_classification_lda.ipynb
-│   ├── 04_classification_random_forest.ipynb
-│   ├── 05_classification_gradient_boost.ipynb
-│   └── 06_clustering_kmeans.ipynb
-├── notebooks
-│   ├── 01_clean_district_shpfile.ipynb
-│   ├── 02_clean_census_data.ipynb
-│   ├── 03_clean_census_geography.ipynb
-│   ├── 04_clean_election_data.ipynb
-│   ├── 05_clean_census_geography.ipynb
-│   ├── 06_merge_census_datasets.ipynb
-│   ├── 07_merge_election_datasets.ipynb
-│   └── 08_final_data_consolidation.ipynb
 ├── pyproject.toml
 ├── references
 ├── reports
