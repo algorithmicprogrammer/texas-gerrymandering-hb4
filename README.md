@@ -164,8 +164,6 @@ pytests test
 ```
 
 
-
-
 ## Project Organization
 ```
 ├── LICENSE
@@ -189,8 +187,13 @@ pytests test
     │   ├── tl_2020_48_tabblock20    # census block geospatial data
     │   ├── tx_pl2020_official   # census racial demographics data
     │   └── vtds_24pg   # voting district geospatial data
-├── docs
-├── models
+├── docs #docs to be published on project website
+│   ├── docs
+    │   ├── code.md  # readme regarding code
+    │   ├── data.md    # readme regarding data
+    │   ├── index.md   # readme for project
+    │   ├── models.md   # readme for machine learning models
+    │   └── references.md   # readme for references used
 ├── pyproject.toml
 ├── references
 ├── reports
@@ -208,6 +211,8 @@ pytests test
     │   └── train.py
     └── plots.py
 ```
+
+
 
 
 
