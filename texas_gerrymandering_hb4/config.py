@@ -30,13 +30,14 @@ CENSUS_DEMOGRAPHICS_TXT = CENSUS_DEMOGRAPHICS_DIR / "Blocks_Pop.txt"
 CENSUS_GEO_DIR = RAW_DATA_DIR / "tl_2020_48_tabblock20"
 CENSUS_GEO_SHP_FILE = CENSUS_GEO_DIR / "tl_2020_48_tabblock20.shp"
 
-VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
-VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
-
-
 ELECTION_DATA_DIR = RAW_DATA_DIR / "2024-general-vtds-election-data"
 GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
 
+VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
+VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
+
+CLEAN_ELECTION_RESULTS = INTERIM_DATA_DIR / "clean_vtd_election_results.csv"
+CLEAN_VTD_GEO = INTERIM_DATA_DIR / "vtds_geo_clean.parquet"
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
