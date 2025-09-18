@@ -1,4 +1,4 @@
-County,FIPS,VTD,cntyvtd,vtdkeyvalue,GEOID_VTD,dem_votes,rep_votes,third_party_votes,total_votes,dem_share
+county,fips,vtd,cntyvtd,vtdkeyvalue,geoid_vtd,dem_votes,rep_votes,third_party_votes,total_votes,dem_share
 Anderson,001,0001,10001,1,4810001,330,742,25,1097,0.300820419325433
 Anderson,001,0002,10002,2,4810002,215,1620,25,1860,0.11559139784946236
 Anderson,001,0003,10003,3,4810003,124,712,21,857,0.14469078179696615
