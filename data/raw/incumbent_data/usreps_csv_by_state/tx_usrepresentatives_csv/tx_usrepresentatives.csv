@@ -1,0 +1,37 @@
+,state,sfips,dno,vac,last,first,middle,nick,suffix,last1,last2,ltype1,ltype2,byear,bmonth,bday,party,gender,race,raceeth,outsidecd,res_line1,res_extrli,res_city,res_state,res_zip,res_zippl4,res_ad_lat,res_ad_lon
+12,Texas,48,6,1,,,,,,,,,,,,,,,,,,,,,,,,,
+363,Texas,48,10,0,mccaul,michael,t,,,,,,,1962.0,1.0,14.0,r,m,w,,,2004 San Miguel Ln,,Austin,TX,78746.0,2017.0,30.307501000000002,-97.78780400000001
+364,Texas,48,28,0,cuellar,henry,,,,,,,,1955.0,9.0,19.0,d,m,h,mexican,,8205 Estate Dr,,Laredo,TX,78045.0,8144.0,27.590799,-99.4524
+365,Texas,48,31,0,carter,john,,,,,,,,1941.0,11.0,6.0,r,m,w,,,1144 Red Bud Ln,,Round Rock,TX,78664.0,9786.0,30.5151,-97.615898
+366,Texas,48,35,0,doggett,lloyd,,,,,,,,1946.0,10.0,6.0,d,m,w,,25.0,1157 San Bernard St,,Austin,TX,78702.0,2029.0,30.2693,-97.72530400000001
+367,Texas,48,19,0,arrington,jodey,,,,,,,,1972.0,3.0,9.0,r,m,w,,,4606 19th St,,Lubbock,TX,79407.0,2302.0,33.5783,-101.911
+368,Texas,48,14,0,weber,randy,,,,,,,,1953.0,7.0,2.0,r,m,w,,,1701 Bending Stream Dr,,Friendswood,TX,77546.0,7894.0,29.491899,-95.206001
+369,Texas,48,36,0,babin,brian,,,,,,,,1948.0,3.0,23.0,r,m,w,,,1600 Barclay Ter,,Woodville,TX,75979.0,,30.763901,-94.39050300000001
+370,Texas,48,34,0,vela,filemon,,,,,,,,1963.0,2.0,13.0,d,m,h,mexican,,224 Calle Cenizo,,Brownsville,TX,78520.0,7406.0,25.921,-97.501297
+371,Texas,48,13,0,jackson,ronny,,,,,,,,1967.0,5.0,4.0,r,m,w,,,14100 Wilderness Trl,,Amarillo,TX,79118.0,1252.0,35.0658,-101.89299999999999
+372,Texas,48,12,0,granger,kay,,,,,,,,1943.0,1.0,18.0,r,f,w,,,3100 W 7th St Apt 811,,Fort Worth,TX,76107.0,2799.0,32.751701000000004,-97.362503
+373,Texas,48,33,0,veasey,marc,,,,,,,,1971.0,1.0,3.0,d,m,b,,,6113 Cholla Dr,,Fort Worth,TX,76112.0,1104.0,32.772099,-97.2239
+374,Texas,48,15,0,gonzalez,vicente,,,,,,,,1967.0,9.0,4.0,d,m,h,,,120 Bluebird Ave,,McAllen,TX,78504.0,2213.0,26.249701,-98.211899
+375,Texas,48,24,0,vanduyne,beth,,,,van,duyne,compound part known,compound part known,1970.0,11.0,16.0,r,f,w,,,2123 Shumard Oak Ln,,Irving,TX,75063.0,3471.0,32.914398,-96.973
+376,Texas,48,25,0,williams,roger,,,,,,,,1949.0,9.0,13.0,r,m,w,,,2600 Lake Austin Blvd Apt 9208,,Austin,TX,78703.0,4472.0,30.280399,-97.77359799999999
+377,Texas,48,21,0,roy,chip,,,,,,,,1972.0,8.0,7.0,r,m,w,,,8901 Chalk Knoll Dr,,Austin,TX,78735.0,1730.0,30.2973,-97.867302
+378,Texas,48,20,0,castro,joaquin,,,,,,,,1974.0,9.0,16.0,d,m,h,mexican,,10402 Pembriar Cir,,San Antonio,TX,78240.0,5609.0,29.537901,-98.609596
+379,Texas,48,23,0,gonzales,tony,,,,,,,,1980.0,10.0,10.0,r,m,h,,35.0,2204 Pinoak Knl,,San Antonio,TX,78248.0,2303.0,29.6001,-98.524101
+380,Texas,48,2,0,crenshaw,dan,,,,,,,,1984.0,3.0,14.0,r,m,w,,,525 W 24th St Apt 1174,,Houston,TX,77008.0,2800.0,29.808398999999998,-95.407097
+381,Texas,48,27,0,cloud,michael,,,,,,,,1975.0,5.0,13.0,r,m,w,,,814 Santa Fe,,Victoria,TX,77904.0,3039.0,28.8433,-96.964401
+382,Texas,48,4,0,fallon,pat,,,,,,,,1967.0,12.0,19.0,r,m,w,,,4851 State Highway 11,,Sherman,TX,75090.0,5242.0,33.554401,-96.533699
+383,Texas,48,11,0,pfluger,august,,,,,,,,1977.0,12.0,28.0,r,m,w,,,1324 Austin St,,San Angelo,TX,76903.0,,31.469801,-100.439
+384,Texas,48,17,0,sessions,pete,,,,,,,,1955.0,3.0,22.0,r,m,w,,,4513 Westchester Dr,,Waco,TX,76710.0,1332.0,31.5602,-97.20030200000001
+385,Texas,48,30,0,johnson,eddie,bernice,,,,,,,1935.0,12.0,3.0,d,f,b,,,2323 N Houston St Apt 512,,Dallas,TX,75219.0,7624.0,32.785801,-96.809097
+386,Texas,48,32,0,allred,colin,,,,,,,,1983.0,4.0,15.0,d,m,b,,,6237 Marquita Ave,,Dallas,TX,75214.0,3325.0,32.825901,-96.7565
+387,Texas,48,26,0,burgess,michael,,,,,,,,1950.0,12.0,23.0,r,m,w,,,2112 E Blackjack Rd,,Pilot Point,TX,76258.0,6936.0,33.316101,-97.033798
+388,Texas,48,16,0,escobar,veronica,,,,,,,,1969.0,9.0,15.0,d,f,h,,,3014 Copper Ave,,El Paso,TX,79930.0,4328.0,31.7901,-106.459
+389,Texas,48,22,0,nehls,troy,e,,,,,,,1968.0,4.0,7.0,r,m,w,,,4002 Scenic Orchard Ln,,Richmond,TX,77407.0,3279.0,29.628201,-95.689598
+390,Texas,48,7,0,fletcher,lizzie,,,,,,,,1975.0,2.0,13.0,d,f,w,,,3225 Locke Ln,,Houston,TX,77019.0,6207.0,29.7428,-95.42400400000001
+391,Texas,48,29,0,garcia,sylvia,,,,,,,,1950.0,9.0,6.0,d,f,h,,,710 Fairbanks St,,Houston,TX,77009.0,1913.0,29.8099,-95.36200000000001
+392,Texas,48,18,0,jacksonlee,sheila,,,,jackson,lee,compound part known,compound part known,1950.0,1.0,12.0,d,f,b,jamaican,,3617 Rio Vista St,,Houston,TX,77021.0,1511.0,29.709498999999997,-95.3619
+393,Texas,48,9,0,green,al,,,,,,,,1947.0,9.0,1.0,d,m,b,,,7447 Cambridge St Apt 109,,Houston,TX,77054.0,2029.0,29.697399,-95.392601
+394,Texas,48,5,0,gooden,lance,,,,,,,,1982.0,12.0,1.0,r,m,w,,,215 Elm Dr,,Terrell,TX,75160.0,1612.0,32.7467,-96.280403
+395,Texas,48,3,0,taylor,van,,,,,,,,1972.0,8.0,1.0,r,m,w,,,8708 Clear Sky Dr,,Plano,TX,75025.0,4161.0,33.0975,-96.7425
+396,Texas,48,8,0,brady,kevin,,,,,,,,1955.0,4.0,11.0,r,m,w,,,15 Lucky Leaf Ct,,The Woodlands,TX,77381.0,3813.0,30.180401,-95.491096
+397,Texas,48,1,0,gohmert,louie,,,,,,,,1953.0,8.0,18.0,r,m,w,,,1121 Ese Loop Apt 323,,Tyler,TX,75701.0,,32.3241,-95.294899
