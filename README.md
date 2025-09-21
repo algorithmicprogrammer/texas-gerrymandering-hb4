@@ -62,6 +62,9 @@ This experiment seeks to quantify negative racial gerrymandering in Texas after 
 <li>url: https://texasracialgerrymanderingstudy.vercel.app</li>
 <li>password: marisoliit</li>
 
+## Paper Rough Draft
+Link: https://www.overleaf.com/read/ssvxhxnggkpx#7d91c3
+
 ### Data Sources
 <ul>
   <li>
