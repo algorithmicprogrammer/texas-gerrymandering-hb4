@@ -2,7 +2,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
-
+RACE
 # Load environment variables from .env file if it exists
 load_dotenv()
 

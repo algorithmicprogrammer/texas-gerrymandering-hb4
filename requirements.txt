@@ -14,5 +14,7 @@ pyarrow
 sqlalchemy
 fiona
 pyproj
+joblib
+scikit-learn
 -e .
 
