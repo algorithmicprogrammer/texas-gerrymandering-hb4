@@ -39,6 +39,9 @@ VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
 CLEAN_ELECTION_RESULTS = INTERIM_DATA_DIR / "clean_vtd_election_results.csv"
 CLEAN_VTD_GEO = INTERIM_DATA_DIR / "vtds_geo_clean.parquet"
 
+TABULAR_DATA_DIR = PROCESSED_DATA_DIR / "tabular"
+FINAL_CSV = TABULAR_DATA_DIR / "districts_final.csv"
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
