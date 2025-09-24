@@ -11,5 +11,8 @@ tqdm
 typer
 duckdb
 pyarrow
+sqlalchemy
+fiona
+pyproj
 -e .
 

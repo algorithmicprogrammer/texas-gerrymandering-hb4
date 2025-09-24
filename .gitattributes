@@ -7,3 +7,6 @@
 *.duckdb filter=lfs diff=lfs merge=lfs -text
 *.pl filter=lfs diff=lfs merge=lfs -text
 *.gpkg filter=lfs diff=lfs merge=lfs -text
+*.sql filter=lfs diff=lfs merge=lfs -text
+*.db filter=lfs diff=lfs merge=lfs -text
+*.parquet filter=lfs diff=lfs merge=lfs -text
