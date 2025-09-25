@@ -16,5 +16,6 @@ fiona
 pyproj
 joblib
 scikit-learn
+matplotlib
 -e .
 
