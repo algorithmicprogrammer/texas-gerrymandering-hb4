@@ -239,7 +239,8 @@ pytests test
     └── plots.py
 ```
 
-
+---
+Made with ♥ by Algorithmic Programmer
 
 
 
