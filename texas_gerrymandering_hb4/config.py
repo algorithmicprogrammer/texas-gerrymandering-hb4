@@ -2,7 +2,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
-RACE
+
 # Load environment variables from .env file if it exists
 load_dotenv()
 
@@ -41,6 +41,8 @@ CLEAN_VTD_GEO = INTERIM_DATA_DIR / "vtds_geo_clean.parquet"
 
 TABULAR_DATA_DIR = PROCESSED_DATA_DIR / "tabular"
 FINAL_CSV = TABULAR_DATA_DIR / "districts_final.csv"
+
+RACE = ["pct_white", "pct_black", "pct_asian", "pct_hispanic"]
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
