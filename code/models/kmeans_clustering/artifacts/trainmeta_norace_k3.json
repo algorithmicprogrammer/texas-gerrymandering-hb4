@@ -3,7 +3,7 @@
   "k": 3,
   "random_state": 42,
   "n_init": "10",
-  "inertia": 67.94973320776575,
+  "inertia": 67.94973320776576,
   "silhouette": 0.4175162643399957,
   "n_samples": 38,
   "n_features": 6,
