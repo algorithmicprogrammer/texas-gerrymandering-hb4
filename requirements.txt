@@ -17,5 +17,6 @@ pyproj
 joblib
 scikit-learn
 matplotlib
+seaborn
 -e .
 
