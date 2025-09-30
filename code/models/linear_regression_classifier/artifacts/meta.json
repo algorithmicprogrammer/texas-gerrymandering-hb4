@@ -1,0 +1,35 @@
+{
+  "source_csv": "/home/aimlexpert/Documents/GitHub/texas-gerrymandering-HB4/data/processed/tabular/districts_final.csv",
+  "origin_target_col": "rep_share",
+  "derived_from": "numeric_share:rep_share",
+  "positive_label": "Republican",
+  "dropped_non_features": [
+    "district_id"
+  ],
+  "categorical_cols": [],
+  "numeric_cols": [
+    "polsby_popper",
+    "schwartzberg",
+    "convex_hull_ratio",
+    "reock",
+    "pct_white",
+    "pct_black",
+    "pct_asian",
+    "pct_hispanic",
+    "dem_share"
+  ],
+  "n_train_raw": 28,
+  "n_test_raw": 10,
+  "n_features_transformed": 9,
+  "feature_names": [
+    "polsby_popper",
+    "schwartzberg",
+    "convex_hull_ratio",
+    "reock",
+    "pct_white",
+    "pct_black",
+    "pct_asian",
+    "pct_hispanic",
+    "dem_share"
+  ]
+}
