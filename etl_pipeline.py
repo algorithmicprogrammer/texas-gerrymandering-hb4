@@ -340,17 +340,36 @@ def build_final(
     vtd_elec = normalize_vtd_key(vtd_elec, "cntyvtd")
     vtd_with_votes = vtd_geo.merge(vtd_elec, on="cntyvtd", how="left").to_crs(AREA_CRS)
 
-    v2d = gpd.sjoin(
+    #v2d = gpd.sjoin(
+    #    vtd_with_votes,
+    #    districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
+    #    how="inner",
+    #    predicate="intersects", #if the geometry interescts, two could intersect
+    #)
+    v2d = gpd.overlay( #create new geometries for each district overlap
         vtd_with_votes,
         districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
-        how="inner",
-        predicate="intersects",
+        how="intersection"
     )
-
+#overcount votes for congressional districts bc voting districts can fit into multiple congressional districts
+   #areal weighte proportion
+   #gpd overlay
     vote_cols = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"] if c in v2d.columns]
     votes_by_dist = v2d.groupby("district_idx")[vote_cols].sum(min_count=1) if vote_cols else pd.DataFrame(
-        index=districts_proj.index
-    )
+        index=districts_proj.index)
+    '''
+    vtd_district_intersections = gpd.overlay(vtd_with_votes, districts_proj.reset_index(), how="intersection")
+    vtd_district_intersections["area"] = vtd_district_intersections.geometry.area
+    vtd_total_area = vtd_district_intersections.groupby("cntyvtd")["area"].transform("sum")
+    vtd_district_intersections["weight"] = vtd_district_intersections["area"] / vtd_total_area
+    for col in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]:
+        vtd_district_intersections[col] = vtd_district_intersections[col] * vtd_district_intersections["weight"]
+    votes_by_dist = vtd_district_intersections.groupby("district_idx")[
+    ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]].sum()
+    '''
+    print(votes_by_dist) #38 values
+
+
 
     part = pd.DataFrame(index=votes_by_dist.index if len(votes_by_dist) else districts_proj.index)
     if {"dem_votes", "rep_votes"}.issubset(votes_by_dist.columns):
