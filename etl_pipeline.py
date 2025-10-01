@@ -1,175 +1,429 @@
-#!/usr/bin/env python3
-import argparse
-import os
-from pathlib import Path
-import shutil
-import sys
+# ETL + 38-district mart (compactness + race % + partisanship)
 
-import geopandas as gpd
+from __future__ import annotations
+
+import argparse
+import math
+import re
+from pathlib import Path
+
 import pandas as pd
 from sqlalchemy import create_engine
 
-# Optional: used to clean raw PL-94 census TXT into a tidy Parquet
+# ---------------- Geo deps ----------------
 try:
-    import duckdb
+    import geopandas as gpd
+except Exception as e:
+    raise SystemExit("GeoPandas required. Install: pip install geopandas shapely fiona pyproj") from e
+
+# attempts to import Shapely's minimum_bounding_radius for Reock compactness
+try:
+    from shapely import minimum_bounding_radius
+    HAS_MINCIRCLE = True
 except Exception:
-    duckdb = None
+    HAS_MINCIRCLE = False
+
+# ---------------- Config ------------------
+SUPPORTED_TABULAR = (".csv", ".tsv", ".parquet", ".txt")
+SUPPORTED_GEO = (".gpkg", ".shp")
+ALL_EXTS = SUPPORTED_TABULAR + SUPPORTED_GEO
+AREA_CRS = "EPSG:3083"  # equal-area CRS for TX for area/length metrics
 
 
-# ---------------- Utility helpers ----------------
-def mkdir_p(path: Path):
-    path.mkdir(parents=True, exist_ok=True)
+# ----- helpers -----
+def mkdir_p(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
 
-def compute_compactness(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Compute Polsby-Popper compactness for each geometry."""
-    gdf = gdf.copy()
-    gdf["area"] = gdf.geometry.area
-    gdf["perimeter"] = gdf.geometry.length
-    gdf["compactness"] = 4 * 3.14159 * gdf["area"] / (gdf["perimeter"] ** 2)
+def stdcols(df: pd.DataFrame) -> pd.DataFrame:
+    """lowercase, trim, non-word -> '_', collapse '__', strip edges"""
+    df = df.copy()
+    df.columns = [
+        re.sub(r"_{2,}", "_", re.sub(r"[^\w]+", "_", c.strip().lower())).strip("_")
+        for c in df.columns
+    ]
+    return df
+
+
+def coerce_types_light(df: pd.DataFrame) -> pd.DataFrame:
+    """Light-touch typing: normalize empties, try datetime on *date*/*time*/*dt*,
+    and numerics if >60% look like numbers in a sample."""
+    out = df.copy()
+    for c in out.columns:
+        if pd.api.types.is_object_dtype(out[c]) or pd.api.types.is_string_dtype(out[c]):
+            out[c] = (
+                out[c].astype(str)
+                .str.strip()
+                .replace({"": pd.NA, "na": pd.NA, "null": pd.NA, "none": pd.NA})
+            )
+    for c in out.columns:
+        if re.search(r"(date|time|timestamp|dt)$", c):
+            out[c] = pd.to_datetime(out[c], errors="coerce")
+    for c in out.columns:
+        if pd.api.types.is_datetime64_any_dtype(out[c]):
+            continue
+        s = out[c].dropna().astype(str).head(12)
+        if len(s) and (s.str.fullmatch(r"-?\d+(\.\d+)?").mean() > 0.6):
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    return out
+
+
+def dataset_key(path: Path) -> str:
+    """safe predictable base name from a filename (mirrors stdcols logic)"""
+    return re.sub(r"_{2,}", "_", re.sub(r"[^\w]+", "_", path.stem.lower())).strip("_")
+
+
+def read_any(path: Path) -> pd.DataFrame:
+    ext = path.suffix.lower()
+    if ext == ".csv":
+        return pd.read_csv(path)
+    if ext == ".tsv":
+        return pd.read_csv(path, sep="\t")
+    if ext == ".parquet":
+        return pd.read_parquet(path)
+    if ext == ".txt":
+        # Try to auto-detect delimiter for PL-94 style TXT files
+        return pd.read_csv(path, sep=None, engine="python")
+    if ext in SUPPORTED_GEO:
+        return gpd.read_file(path)
+    raise ValueError(f"Unsupported ext: {ext}")
+
+
+def is_geodf(df: pd.DataFrame) -> bool:
+    return isinstance(df, gpd.GeoDataFrame)
+
+
+def to_sqlite(df: pd.DataFrame, sqlite_path: Path, table: str) -> None:
+    eng = create_engine(f"sqlite:///{sqlite_path}")
+    with eng.begin() as conn:
+        df.to_sql(table, conn, if_exists="replace", index=False)
+
+
+def write_parquet(df: pd.DataFrame, out_path: Path) -> None:
+    mkdir_p(out_path.parent)
+    df.to_parquet(out_path, engine="pyarrow", index=False)
+
+
+def write_geo_parquet(gdf: "gpd.GeoDataFrame", out_path: Path) -> None:
+    mkdir_p(out_path.parent)
+    gdf.to_parquet(out_path, index=False)
+
+
+def ensure_crs(gdf: "gpd.GeoDataFrame") -> "gpd.GeoDataFrame":
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
     return gdf
 
 
-def clean_pl94_raw_to_parquet(raw_path: Path, out_parquet_dir: Path) -> Path:
-    """
-    Reads the raw PL-94 demographics TXT/CSV with DuckDB, computes typed columns
-    and share features, and writes a cleaned Parquet named 'tx_pl94_clean.parquet'.
-    Returns the output path.
+def ensure_geoid20_str(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure geoid20 exists and is a 15-digit zero-padded string (strip .0 if present)."""
+    if "geoid20" in df.columns:
+        s = (
+            df["geoid20"]
+            .astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.zfill(15)
+        )
+        df = df.copy()
+        df["geoid20"] = s
+    return df
 
-    Expected raw columns: SCTBKEY,total,vap,anglo,black,asian,hisp,
-    anglovap,blackvap,asianvap,hispvap
-    """
-    if duckdb is None:
-        raise SystemExit("DuckDB required for --pl94-raw. Install: pip install duckdb")
 
-    mkdir_p(out_parquet_dir)
-    out_path = out_parquet_dir / "tx_pl94_clean.parquet"
+def geo_to_sql_ready(gdf: "gpd.GeoDataFrame") -> pd.DataFrame:
+    out = gdf.copy()
+    if "geometry" in out.columns:
+        out["geometry_wkb"] = out.geometry.to_wkb(hex=True)
+        b = out.geometry.bounds
+        out["bbox_minx"] = b["minx"]
+        out["bbox_miny"] = b["miny"]
+        out["bbox_maxx"] = b["maxx"]
+        out["bbox_maxy"] = b["maxy"]
+        out = out.drop(columns=["geometry"])
+    return out
 
-    con = duckdb.connect()
-    con.execute(f"""
-    CREATE OR REPLACE TABLE pl94_clean AS
-    WITH base AS (
-      SELECT
-        CAST(SCTBKEY AS VARCHAR) AS geoid20,
-        CAST(total   AS BIGINT)  AS total_pop,
-        CAST(vap     AS BIGINT)  AS vap_total,
 
-        -- Race/Ethnicity counts (TOTAL)
-        CAST(anglo   AS BIGINT)  AS nh_white,
-        CAST(black   AS BIGINT)  AS nh_black,
-        CAST(asian   AS BIGINT)  AS nh_asian,
-        CAST(hisp    AS BIGINT)  AS hispanic,
+def normalize_vtd_key(df: pd.DataFrame, prefer="cntyvtd") -> pd.DataFrame:
+    for c in ["cntyvtd", "cntyvtdkey", "cnty_vtd", "vtdkey", "vtd_key", "county_vtd_key"]:
+        if c in df.columns:
+            return df if c == prefer else df.rename(columns={c: prefer})
+    raise AssertionError("No recognizable VTD key (cntyvtd/cntyvtdkey/…)")
 
-        -- Race/Ethnicity counts (VAP)
-        CAST(anglovap AS BIGINT) AS nh_white_vap,
-        CAST(blackvap AS BIGINT) AS nh_black_vap,
-        CAST(asianvap AS BIGINT) AS nh_asian_vap,
-        CAST(hispvap  AS BIGINT) AS hispanic_vap
-      FROM read_csv_auto('{raw_path.as_posix()}', header=True)
-    ),
-    shares AS (
-      SELECT
-        *,
-        -- Shares (TOTAL)
-        (nh_white  ::DOUBLE / NULLIF(total_pop,0)) AS share_nh_white_total,
-        (nh_black  ::DOUBLE / NULLIF(total_pop,0)) AS share_nh_black_total,
-        (nh_asian  ::DOUBLE / NULLIF(total_pop,0)) AS share_nh_asian_total,
-        (hispanic  ::DOUBLE / NULLIF(total_pop,0)) AS share_hispanic_total,
 
-        -- Shares (VAP)
-        (nh_white_vap  ::DOUBLE / NULLIF(vap_total,0)) AS share_nh_white_vap,
-        (nh_black_vap  ::DOUBLE / NULLIF(vap_total,0)) AS share_nh_black_vap,
-        (nh_asian_vap  ::DOUBLE / NULLIF(vap_total,0)) AS share_nh_asian_vap,
-        (hispanic_vap  ::DOUBLE / NULLIF(vap_total,0)) AS share_hispanic_vap
-      FROM base
-    ),
-    qa AS (
-      SELECT
-        *,
-        GREATEST(total_pop - COALESCE(nh_white,0) - COALESCE(nh_black,0) - COALESCE(nh_asian,0) - COALESCE(hispanic,0), 0) AS other_pop,
-        GREATEST(vap_total - COALESCE(nh_white_vap,0) - COALESCE(nh_black_vap,0) - COALESCE(nh_asian_vap,0) - COALESCE(hispanic_vap,0), 0) AS other_vap
-      FROM shares
+def compute_compactness(districts_gdf: "gpd.GeoDataFrame") -> pd.DataFrame:
+    g = districts_gdf.to_crs(AREA_CRS).copy()
+    A, P = g.geometry.area, g.geometry.length
+    polsby = (4 * math.pi * A) / (P ** 2)
+    schwartz = ((4 * math.pi * A) ** 0.5) / P
+    hull_ratio = A / g.geometry.convex_hull.area.replace({0: pd.NA})
+    if HAS_MINCIRCLE:
+        radii = g.geometry.map(minimum_bounding_radius)
+        reock = A / (math.pi * (radii ** 2))
+    else:
+        reock = pd.Series([pd.NA] * len(g), index=g.index)
+    return pd.DataFrame(
+        {
+            "polsby_popper": polsby,
+            "schwartzberg": schwartz,
+            "convex_hull_ratio": hull_ratio,
+            "reock": reock,
+        },
+        index=g.index,
     )
-    SELECT * FROM qa;
-    """)
-    con.execute(f"COPY pl94_clean TO '{out_path.as_posix()}' (FORMAT PARQUET);")
-    con.close()
-    return out_path
+
+
+def unify_pl94_schema(pl94: pd.DataFrame) -> pd.DataFrame:
+    """Normalize PL-94 column names to the pipeline's expected schema.
+
+    - Detect block GEOID (supports geoid20 / geoid / tabblock20 / sctbkey / ctbkey).
+    - Map common Texas fields: vap->vap_total, anglovap->nh_white_vap, blackvap->nh_black_vap,
+      asianvap->nh_asian_vap, hispvap->hispanic_vap.
+    - Ensure geoid20 is a zero-padded 15-char string.
+    """
+    df = pl94.copy()
+
+    geoid_candidates = [
+        "geoid20", "geoid", "tabblock20", "tabblock2020", "block_geoid", "blk_geoid", "sctbkey", "ctbkey"
+    ]
+    geoid_col = next((c for c in geoid_candidates if c in df.columns), None)
+    if geoid_col is None:
+        raise ValueError("PL-94 file does not contain a recognizable GEOID column (e.g., geoid20 or sctbkey)")
+    if geoid_col != "geoid20":
+        df = df.rename(columns={geoid_col: "geoid20"})
+    # make string GEOIDs with padding
+    df["geoid20"] = (
+        df["geoid20"].astype(str).str.replace(".0$", "", regex=True).str.replace(r"[^\d]", "", regex=True).str.zfill(15)
+    )
+
+    # map VAP fields
+    rename_map = {}
+    if "vap_total" not in df.columns and "vap" in df.columns:
+        rename_map["vap"] = "vap_total"
+    # race VAPs (Texas naming)
+    if "anglovap" in df.columns and "nh_white_vap" not in df.columns:
+        rename_map["anglovap"] = "nh_white_vap"
+    if "blackvap" in df.columns and "nh_black_vap" not in df.columns:
+        rename_map["blackvap"] = "nh_black_vap"
+    if "asianvap" in df.columns and "nh_asian_vap" not in df.columns:
+        rename_map["asianvap"] = "nh_asian_vap"
+    if "hispvap" in df.columns and "hispanic_vap" not in df.columns:
+        rename_map["hispvap"] = "hispanic_vap"
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    return df
 
 
 # ---------------- Stage 1: ETL ----------------
-def run_etl(input_files, tabular_dir: Path, geospatial_dir: Path, sqlite_path: Path):
-    mkdir_p(tabular_dir)
-    mkdir_p(geospatial_dir)
+# NOW accepts an explicit list of input files instead of scanning a directory
+def run_etl(input_files: list[Path], out_parquet_dir: Path, out_geo_dir: Path, sqlite_path: Path):
+    print("\n========== Stage 1: ETL ==========")
+    mkdir_p(out_parquet_dir)
+    mkdir_p(out_geo_dir)
     mkdir_p(sqlite_path.parent)
 
-    # Copy tabular files
-    for f in input_files:
-        if f.suffix in (".csv", ".tsv", ".parquet"):
-            shutil.copy(f, tabular_dir / f.name)
+    for path in input_files:
+        if not path.exists():
+            raise FileNotFoundError(f"Missing file: {path}")
+        if path.suffix.lower() not in ALL_EXTS:
+            raise ValueError(f"Unsupported input type for {path.name} (ext {path.suffix})")
 
-    # Copy geospatial files
-    for f in input_files:
-        if f.suffix in (".gpkg", ".shp"):
-            shutil.copy(f, geospatial_dir / f.name)
+        name = dataset_key(path)
+        print(f"[ETL] Reading {path} -> key={name}")
+        df = read_any(path).drop_duplicates(ignore_index=True)
 
-    # Load into SQLite
-    engine = create_engine(f"sqlite:///{sqlite_path}")
-    for f in tabular_dir.glob("*.*"):
-        if f.suffix == ".parquet":
-            df = pd.read_parquet(f)
-        elif f.suffix == ".csv":
-            df = pd.read_csv(f)
-        elif f.suffix == ".tsv":
-            df = pd.read_csv(f, sep="\t")
+        if is_geodf(df):
+            df = ensure_crs(df)
+            attrs = stdcols(df.drop(columns=["geometry"])) if "geometry" in df.columns else stdcols(df)
+            attrs = coerce_types_light(attrs)
+            gdf = gpd.GeoDataFrame(attrs, geometry=df.get("geometry"), crs=df.crs)
+            write_geo_parquet(gdf, out_geo_dir / f"{name}.parquet")
+            to_sqlite(geo_to_sql_ready(gdf), sqlite_path, f"stg_{name}")
         else:
-            continue
-        table_name = f.stem
-        df.to_sql(table_name, engine, if_exists="replace", index=False)
+            df = coerce_types_light(stdcols(df))
+            write_parquet(df, out_parquet_dir / f"{name}.parquet")
+            to_sqlite(df, sqlite_path, f"stg_{name}")
 
-# ---------------- Stage 2: Build Final ----------------
-def build_final(tabular_dir: Path, geospatial_dir: Path) -> pd.DataFrame:
-    # Example final dataset merge placeholder
-    dfs = []
-    for f in tabular_dir.glob("*.parquet"):
-        dfs.append(pd.read_parquet(f))
-    if not dfs:
-        raise ValueError("No tabular parquet files found for final build")
-    final = pd.concat(dfs, axis=1)
+    print("========== ETL complete ==========\n")
+
+
+# ------------- Stage 2: Build final  -------------
+def build_final(
+    out_parquet_dir: Path,
+    out_geo_dir: Path,
+    districts_key: str,
+    census_key: str,
+    vtds_key: str,
+    pl94_key: str,
+    elections_key: str,
+) -> pd.DataFrame:
+    print("========== Stage 2: Build final 38-row dataset ==========")
+
+    # Resolve cleaned file paths from dataset stems generated in Stage 1
+    districts_fp = out_geo_dir / f"{districts_key}.parquet"
+    census_fp = out_geo_dir / f"{census_key}.parquet"
+    vtds_fp = out_geo_dir / f"{vtds_key}.parquet"
+    pl94_fp = out_parquet_dir / f"{pl94_key}.parquet"
+    elect_fp = out_parquet_dir / f"{elections_key}.parquet"
+
+    missing_paths = [p for p in [districts_fp, census_fp, vtds_fp, pl94_fp, elect_fp] if not p.exists()]
+    if missing_paths:
+        msg = (
+            "Stage 2 expected these cleaned files from Stage 1 but didn't find them:\n"
+            + "\n".join(f" - {p}" for p in missing_paths)
+            + "\n(Hint: the cleaned filenames are derived from your input stems via dataset_key; check your stems or output folders.)"
+        )
+        raise FileNotFoundError(msg)
+
+    print("[INFO] Using cleaned files:")
+    print("  ", districts_fp)
+    print("  ", census_fp)
+    print("  ", vtds_fp)
+    print("  ", pl94_fp)
+    print("  ", elect_fp)
+
+    # Read cleaned layers produced by Stage 1
+    districts = ensure_crs(stdcols(gpd.read_parquet(districts_fp)))
+    census_geo = ensure_crs(stdcols(gpd.read_parquet(census_fp)))
+    vtd_geo = ensure_crs(stdcols(gpd.read_parquet(vtds_fp)))
+    pl94 = stdcols(pd.read_parquet(pl94_fp))
+    pl94 = unify_pl94_schema(pl94)
+    vtd_elec = stdcols(pd.read_parquet(elect_fp))
+
+    # 🔧 NEW: ensure geoid20 is 15-digit string on BOTH sides before merge
+    census_geo = ensure_geoid20_str(census_geo)
+    pl94 = ensure_geoid20_str(pl94)
+
+    # ----- explicit PL-94 fields -----
+    PL94_TOTAL_VAP = "vap_total"
+    PL94_RACE_VAP = {
+        "pct_white": "nh_white_vap",
+        "pct_black": "nh_black_vap",
+        "pct_asian": "nh_asian_vap",
+        "pct_hispanic": "hispanic_vap",
+    }
+    need = ["geoid20", PL94_TOTAL_VAP, *PL94_RACE_VAP.values()]
+    missing = [c for c in need if c not in pl94.columns]
+    if missing:
+        msg = (
+            "PL-94 expected columns missing: " + str(missing)
+            + "\nColumns available: " + ", ".join(list(pl94.columns)[:40]) + ("..." if len(pl94.columns) > 40 else "")
+            + "\n(Hint: rename your PL-94 columns before Stage 1 or adjust PL94_RACE_VAP in the pipeline.)"
+        )
+        raise ValueError(msg)
+
+    # (A) Census attrs to census geo on geoid20 → spatial aggregate to districts
+    if "geoid20" not in census_geo.columns:
+        raise ValueError("Census geometry must contain 'geoid20'")
+    census_merged = census_geo.merge(pl94[need], on="geoid20", how="left")
+
+    # project to equal-area CRS
+    census_proj, districts_proj = census_merged.to_crs(AREA_CRS), districts.to_crs(AREA_CRS)
+
+    # Census -> Districts (within)
+    c2d = gpd.sjoin(
+        census_proj,
+        districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
+        how="inner",
+        predicate="within",
+    )
+
+    agg = c2d.groupby("district_idx")[[PL94_TOTAL_VAP] + list(PL94_RACE_VAP.values())].sum(min_count=1)
+    den = agg[PL94_TOTAL_VAP].replace({0: pd.NA})
+    race_pct = pd.DataFrame(index=agg.index)
+    for out_name, src_col in PL94_RACE_VAP.items():
+        race_pct[out_name] = (agg[src_col] / den).where(den > 0)
+
+    # (B) VTD geo + VTD election on cntyvtd → spatial aggregate to districts
+    vtd_geo = normalize_vtd_key(vtd_geo, "cntyvtd")
+    vtd_elec = normalize_vtd_key(vtd_elec, "cntyvtd")
+    vtd_with_votes = vtd_geo.merge(vtd_elec, on="cntyvtd", how="left").to_crs(AREA_CRS)
+
+    v2d = gpd.sjoin(
+        vtd_with_votes,
+        districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
+        how="inner",
+        predicate="intersects",
+    )
+
+    vote_cols = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"] if c in v2d.columns]
+    votes_by_dist = v2d.groupby("district_idx")[vote_cols].sum(min_count=1) if vote_cols else pd.DataFrame(
+        index=districts_proj.index
+    )
+
+    part = pd.DataFrame(index=votes_by_dist.index if len(votes_by_dist) else districts_proj.index)
+    if {"dem_votes", "rep_votes"}.issubset(votes_by_dist.columns):
+        tot = (
+            votes_by_dist["total_votes"]
+            if "total_votes" in votes_by_dist.columns
+            else (votes_by_dist["dem_votes"] + votes_by_dist["rep_votes"] + votes_by_dist.get("third_party_votes", 0))
+        )
+        part["dem_share"] = (votes_by_dist["dem_votes"] / tot).where(tot > 0)
+        part["rep_share"] = (votes_by_dist["rep_votes"] / tot).where(tot > 0)
+    else:
+        part["dem_share"] = pd.NA
+        part["rep_share"] = pd.NA
+
+    # (C) Compactness on districts
+    cmpx = compute_compactness(districts_proj)
+
+    # (D) Assemble final
+    final = pd.DataFrame(index=districts_proj.index)
+
+    id_col = None
+    for cand in ["district", "district_id", "cd", "dist"]:
+        if cand in districts.columns:
+            id_col = cand
+            break
+    final["district_id"] = districts[id_col].values if id_col else (districts_proj.index + 1)
+
+    final = final.join(cmpx).join(race_pct).join(part[["dem_share", "rep_share"]])
+    final = final.sort_index()
+    assert len(final) == 38, f"Expected 38 districts, found {len(final)}"
     return final
 
 
-# ---------------- Main ----------------
+# ---------------- CLI ----------------
+# Now accepts FIVE explicit input paths instead of a directory scan
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--districts", type=Path, required=True, help="Path to districts shapefile/GeoPackage")
-    ap.add_argument("--census", type=Path, required=True, help="Path to census blocks shapefile/GeoPackage")
-    ap.add_argument("--vtds", type=Path, required=True, help="Path to VTDs shapefile/GeoPackage")
-    ap.add_argument("--pl94", type=Path, required=False, help="Path to *cleaned* PL-94 attributes file (CSV/TSV/Parquet)")
-    ap.add_argument("--pl94-raw", type=Path, required=False, help="Path to *raw* PL-94 demographics TXT/CSV (SCTBKEY,total,vap,anglo,...)")
-    ap.add_argument("--elections", type=Path, required=True, help="Path to elections results file (CSV/Parquet)")
-    ap.add_argument("--data-processed-tabular", type=Path, required=True)
-    ap.add_argument("--data-processed-geospatial", type=Path, required=True)
-    ap.add_argument("--sqlite", type=Path, required=True)
+    ap = argparse.ArgumentParser(description="ETL + final 38-district dataset")
+    ap.add_argument("--districts", type=Path, required=True, help="Path to district polygons file (SHP/GPKG/GeoParquet)")
+    ap.add_argument("--census", type=Path, required=True, help="Path to census blocks geo file (SHP/GPKG/GeoParquet)")
+    ap.add_argument("--vtds", type=Path, required=True, help="Path to VTD geometries file (SHP/GPKG/GeoParquet)")
+    ap.add_argument("--pl94", type=Path, required=True, help="Path to PL-94 attributes file (CSV/TSV/Parquet/TXT)")
+    ap.add_argument("--elections", type=Path, required=True, help="Path to VTD election results file (CSV/TSV/Parquet)")
+
+    ap.add_argument("--data-processed-tabular", type=Path, required=True, help="Output folder for cleaned Parquet")
+    ap.add_argument("--data-processed-geospatial", type=Path, required=True, help="Output folder for cleaned GeoParquet")
+    ap.add_argument("--sqlite", type=Path, required=True, help="SQLite warehouse path")
     args = ap.parse_args()
 
-    # If raw PL-94 file provided, clean it into processed tabular folder.
-    if args.pl94_raw:
-        cleaned_pl94 = clean_pl94_raw_to_parquet(args.pl94_raw, args.data_processed_tabular)
-    elif args.pl94:
-        cleaned_pl94 = args.pl94
-    else:
-        raise SystemExit("Provide either --pl94 (cleaned) or --pl94-raw (raw TXT/CSV).")
-
-    # Run ETL on all inputs, including the cleaned PL-94 file
-    input_files = [args.districts, args.census, args.vtds, cleaned_pl94, args.elections]
+    input_files = [args.districts, args.census, args.vtds, args.pl94, args.elections]
 
     run_etl(input_files, args.data_processed_tabular, args.data_processed_geospatial, args.sqlite)
-    final = build_final(args.data_processed_tabular, args.data_processed_geospatial)
 
-    print("Final dataset built with shape:", final.shape)
+    # Derive dataset keys from stems for Stage 2
+    dk, ck, vk, pk, ek = [dataset_key(p) for p in input_files]
+
+    final = build_final(
+        args.data_processed_tabular,
+        args.data_processed_geospatial,
+        dk,
+        ck,
+        vk,
+        pk,
+        ek,
+    )
+
+    pq = args.data_processed_tabular / "districts_final.parquet"
+    csv = args.data_processed_tabular / "districts_final.csv"
+    write_parquet(final, pq)
+    final.to_csv(csv, index=False)
+    print("\nSaved:")
+    print(" ", pq)
+    print(" ", csv)
 
 
 if __name__ == "__main__":
     main()
-
