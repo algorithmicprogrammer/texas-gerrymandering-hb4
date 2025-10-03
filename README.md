@@ -177,14 +177,15 @@ pip install -r requirements.txt
 
 6. Run ETL pipeline.
 ```
-python3 etl_pipeline.py \
+python etl_pipeline.py \
   --districts data/interim/districts_clean.gpkg \
   --census data/interim/texas_census_blocks_clean.gpkg \
-  --vtds data/interim//vtds_geo_clean.gpkg \
+  --vtds data/interim/vtds_geo_clean.gpkg \
   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
-  --elections data/interim/clean_vtd_election_results.csv \
+  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv \
+  --elections-office "U.S. Sen" \
   --data-processed-tabular data/processed/tabular \
-  --data-processed-geospatial data/processed/geo \
+  --data-processed-geospatial data/processed/geospatial \
   --sqlite data/warehouse/warehouse.db
 ```
 
