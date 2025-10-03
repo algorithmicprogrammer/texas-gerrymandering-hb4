@@ -1,4 +1,5 @@
-# ETL + 38-district mart (compactness + race % + partisanship)
+# etl_pipeline.py
+# ETL + 38-district mart (compactness + race % + partisanship) + 2024 elections cleaner
 
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ except Exception:
 
 # ---------------- Config ------------------
 SUPPORTED_TABULAR = (".csv", ".tsv", ".parquet", ".txt")
-SUPPORTED_GEO = (".gpkg", ".shp")
+SUPPORTED_GEO = (".gpkg", ".shp", ".parquet")  # allow GeoParquet inputs
 ALL_EXTS = SUPPORTED_TABULAR + SUPPORTED_GEO
 AREA_CRS = "EPSG:3083"  # equal-area CRS for TX for area/length metrics
 
@@ -80,11 +81,16 @@ def read_any(path: Path) -> pd.DataFrame:
     if ext == ".tsv":
         return pd.read_csv(path, sep="\t")
     if ext == ".parquet":
-        return pd.read_parquet(path)
+        # Could be tabular or geo; try GeoPandas and fall back
+        try:
+            g = gpd.read_parquet(path)
+            return g
+        except Exception:
+            return pd.read_parquet(path)
     if ext == ".txt":
         # Try to auto-detect delimiter for PL-94 style TXT files
         return pd.read_csv(path, sep=None, engine="python")
-    if ext in SUPPORTED_GEO:
+    if ext in (".gpkg", ".shp"):
         return gpd.read_file(path)
     raise ValueError(f"Unsupported ext: {ext}")
 
@@ -173,13 +179,7 @@ def compute_compactness(districts_gdf: "gpd.GeoDataFrame") -> pd.DataFrame:
 
 
 def unify_pl94_schema(pl94: pd.DataFrame) -> pd.DataFrame:
-    """Normalize PL-94 column names to the pipeline's expected schema.
-
-    - Detect block GEOID (supports geoid20 / geoid / tabblock20 / sctbkey / ctbkey).
-    - Map common Texas fields: vap->vap_total, anglovap->nh_white_vap, blackvap->nh_black_vap,
-      asianvap->nh_asian_vap, hispvap->hispanic_vap.
-    - Ensure geoid20 is a zero-padded 15-char string.
-    """
+    """Normalize PL-94 column names to the pipeline's expected schema."""
     df = pl94.copy()
 
     geoid_candidates = [
@@ -199,7 +199,6 @@ def unify_pl94_schema(pl94: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
     if "vap_total" not in df.columns and "vap" in df.columns:
         rename_map["vap"] = "vap_total"
-    # race VAPs (Texas naming)
     if "anglovap" in df.columns and "nh_white_vap" not in df.columns:
         rename_map["anglovap"] = "nh_white_vap"
     if "blackvap" in df.columns and "nh_black_vap" not in df.columns:
@@ -215,13 +214,79 @@ def unify_pl94_schema(pl94: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ---------------- Elections cleaner ----------------
+def is_tall_elections(df: pd.DataFrame) -> bool:
+    req = {"office", "party", "votes"}
+    has_vtd = {"cntyvtd", "cntyvtdkey", "cnty_vtd", "vtdkey", "vtd_key", "county_vtd_key"} & set(df.columns)
+    return req.issubset(df.columns) and bool(has_vtd)
+
+
+def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "President") -> pd.DataFrame:
+    """
+    Convert tall VTD returns (one row per candidate) into a single wide row per VTD with
+    dem/rep/third/total vote columns, filtered to a specific contest (default: President).
+    """
+    t = df.copy()
+    t = normalize_vtd_key(t, "cntyvtd")
+
+    # Filter to target contest (case-insensitive match)
+    if "office" in t.columns:
+        mask = t["office"].astype(str).str.casefold() == str(target_office).casefold()
+        sub = t.loc[mask].copy()
+        if sub.empty:
+            # Fallback: keep the whole table but warn via print
+            print(f"[WARN] No rows matched office='{target_office}'. Using all offices combined.")
+            sub = t.copy()
+    else:
+        sub = t
+
+    # Coerce votes to numeric
+    sub["votes"] = pd.to_numeric(sub["votes"], errors="coerce").fillna(0).astype(int)
+    sub["party"] = sub.get("party", "").astype(str).str.upper().str.strip()
+
+    # Aggregate party totals per VTD
+    agg = sub.groupby(["cntyvtd", "party"], as_index=False)["votes"].sum()
+
+    # Pivot to party columns and compute aggregates
+    parties = ["D", "R", "G", "L", "I", "W"]
+    piv = agg.pivot_table(index="cntyvtd", columns="party", values="votes", fill_value=0, aggfunc="sum")
+    for p in parties:
+        if p not in piv.columns:
+            piv[p] = 0
+
+    out = pd.DataFrame({
+        "cntyvtd": piv.index.astype(str),
+        "dem_votes": piv["D"].astype(int),
+        "rep_votes": piv["R"].astype(int),
+    })
+    out["third_party_votes"] = (piv[["G", "L", "I", "W"]].sum(axis=1)).astype(int)
+    out["total_votes"] = (out["dem_votes"] + out["rep_votes"] + out["third_party_votes"]).astype(int)
+
+    # optional sanity flags
+    out["two_party_dem_share"] = (
+        out["dem_votes"] / (out["dem_votes"] + out["rep_votes"]).replace({0: pd.NA})
+    )
+
+    # final column order used later
+    cols = ["cntyvtd", "dem_votes", "rep_votes", "third_party_votes", "total_votes", "two_party_dem_share"]
+    return out.loc[:, cols]
+
+
 # ---------------- Stage 1: ETL ----------------
-# NOW accepts an explicit list of input files instead of scanning a directory
-def run_etl(input_files: list[Path], out_parquet_dir: Path, out_geo_dir: Path, sqlite_path: Path):
+def run_etl(
+    input_files: list[Path],
+    out_parquet_dir: Path,
+    out_geo_dir: Path,
+    sqlite_path: Path,
+    elections_office: str = "President",
+):
     print("\n========== Stage 1: ETL ==========")
     mkdir_p(out_parquet_dir)
     mkdir_p(out_geo_dir)
     mkdir_p(sqlite_path.parent)
+
+    # Identify which one is the elections file so we can post-process it if it's tall
+    elections_path = input_files[-1]  # by convention from CLI: last is --elections
 
     for path in input_files:
         if not path.exists():
@@ -233,6 +298,24 @@ def run_etl(input_files: list[Path], out_parquet_dir: Path, out_geo_dir: Path, s
         print(f"[ETL] Reading {path} -> key={name}")
         df = read_any(path).drop_duplicates(ignore_index=True)
 
+        # --- SPECIAL HANDLING: VTD election results cleaner ---
+        if path == elections_path and not is_geodf(df):
+            # Standardize cols and attempt elections-clean if it looks like a tall returns file
+            tdf = coerce_types_light(stdcols(df))
+            if is_tall_elections(tdf):
+                print(f"[ETL] Detected tall elections file. Cleaning office='{elections_office}' → wide VTD votes.")
+                try:
+                    tdf = clean_vtd_election_returns(tdf, target_office=elections_office)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed cleaning elections file '{path.name}': {e}"
+                    ) from e
+            # Write cleaned/tabular elections parquet + stage table
+            write_parquet(tdf, out_parquet_dir / f"{name}.parquet")
+            to_sqlite(tdf, sqlite_path, f"stg_{name}")
+            continue
+
+        # --- Normal handling for all other files ---
         if is_geodf(df):
             df = ensure_crs(df)
             attrs = stdcols(df.drop(columns=["geometry"])) if "geometry" in df.columns else stdcols(df)
@@ -313,7 +396,7 @@ def build_final(
         )
         raise ValueError(msg)
 
-    # (A) Census attrs to census geo on geoid20 → spatial aggregate to districts
+    # (A) Blocks + PL94 → area-weighted to districts
     if "geoid20" not in census_geo.columns:
         raise ValueError("Census geometry must contain 'geoid20'")
     census_merged = census_geo.merge(pl94[need], on="geoid20", how="left")
@@ -321,68 +404,172 @@ def build_final(
     # project to equal-area CRS
     census_proj, districts_proj = census_merged.to_crs(AREA_CRS), districts.to_crs(AREA_CRS)
 
-    # Census -> Districts (within)
-    c2d = gpd.sjoin(
-        census_proj,
-        districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
-        how="inner",
-        predicate="within",
+    d_sub = districts_proj[["geometry"]].reset_index(names="district_idx")
+    blk = census_proj[["geoid20", "geometry"]].copy()
+    blk_attrs = pl94[need].copy()
+
+    blk_inter = gpd.overlay(blk, d_sub, how="intersection", keep_geom_type=True)
+
+    blk_inter = blk_inter.merge(blk_attrs, on="geoid20", how="left")
+    blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
+    blk_inter["blk_area"] = blk_inter["geoid20"].map(blk_area)
+    blk_inter["inter_area"] = blk_inter.geometry.area
+    blk_inter = blk_inter.loc[blk_inter["blk_area"] > 0].copy()
+    blk_inter["w"] = (blk_inter["inter_area"] / blk_inter["blk_area"]).clip(0, 1)
+
+    to_sum = [PL94_TOTAL_VAP] + list(PL94_RACE_VAP.values())
+    for col in to_sum:
+        blk_inter[col] = blk_inter[col].fillna(0) * blk_inter["w"]
+
+    agg = (
+        blk_inter.groupby("district_idx", observed=True)[to_sum]
+        .sum(min_count=1)
+        .reindex(districts_proj.reset_index(names="district_idx")["district_idx"], fill_value=0)
     )
 
-    agg = c2d.groupby("district_idx")[[PL94_TOTAL_VAP] + list(PL94_RACE_VAP.values())].sum(min_count=1)
     den = agg[PL94_TOTAL_VAP].replace({0: pd.NA})
     race_pct = pd.DataFrame(index=agg.index)
     for out_name, src_col in PL94_RACE_VAP.items():
         race_pct[out_name] = (agg[src_col] / den).where(den > 0)
 
-    # (B) VTD geo + VTD election on cntyvtd → spatial aggregate to districts
+    # --- (B) VTD geo + VTD election on cntyvtd → area-weighted to districts ---
+
+    # 1) Normalize join key and merge votes onto VTD geometries, then project to equal-area CRS
     vtd_geo = normalize_vtd_key(vtd_geo, "cntyvtd")
     vtd_elec = normalize_vtd_key(vtd_elec, "cntyvtd")
-    vtd_with_votes = vtd_geo.merge(vtd_elec, on="cntyvtd", how="left").to_crs(AREA_CRS)
 
-    #v2d = gpd.sjoin(
-    #    vtd_with_votes,
-    #    districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
-    #    how="inner",
-    #    predicate="intersects", #if the geometry interescts, two could intersect
-    #)
-    v2d = gpd.overlay( #create new geometries for each district overlap
-        vtd_with_votes,
-        districts_proj[["geometry"]].reset_index().rename(columns={"index": "district_idx"}),
-        how="intersection"
-    )
-#overcount votes for congressional districts bc voting districts can fit into multiple congressional districts
-   #areal weighte proportion
-   #gpd overlay
-    vote_cols = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"] if c in v2d.columns]
-    votes_by_dist = v2d.groupby("district_idx")[vote_cols].sum(min_count=1) if vote_cols else pd.DataFrame(
-        index=districts_proj.index)
-    '''
-    vtd_district_intersections = gpd.overlay(vtd_with_votes, districts_proj.reset_index(), how="intersection")
-    vtd_district_intersections["area"] = vtd_district_intersections.geometry.area
-    vtd_total_area = vtd_district_intersections.groupby("cntyvtd")["area"].transform("sum")
-    vtd_district_intersections["weight"] = vtd_district_intersections["area"] / vtd_total_area
-    for col in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]:
-        vtd_district_intersections[col] = vtd_district_intersections[col] * vtd_district_intersections["weight"]
-    votes_by_dist = vtd_district_intersections.groupby("district_idx")[
-    ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]].sum()
-    '''
-    print(votes_by_dist) #38 values
-
-
-
-    part = pd.DataFrame(index=votes_by_dist.index if len(votes_by_dist) else districts_proj.index)
-    if {"dem_votes", "rep_votes"}.issubset(votes_by_dist.columns):
-        tot = (
-            votes_by_dist["total_votes"]
-            if "total_votes" in votes_by_dist.columns
-            else (votes_by_dist["dem_votes"] + votes_by_dist["rep_votes"] + votes_by_dist.get("third_party_votes", 0))
+    def _norm_cntyvtd(s: pd.Series) -> pd.Series:
+        # to string, trim, drop trailing .0, remove non-digits, then lstrip zeros
+        return (
+            s.astype(str)
+            .str.strip()
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.lstrip("0")
+            .replace({"": pd.NA})
         )
-        part["dem_share"] = (votes_by_dist["dem_votes"] / tot).where(tot > 0)
-        part["rep_share"] = (votes_by_dist["rep_votes"] / tot).where(tot > 0)
+
+    # Build a **normalized join key** on both sides
+    vtd_geo = vtd_geo.copy()
+    vtd_elec = vtd_elec.copy()
+    vtd_geo["cntyvtd_norm"] = _norm_cntyvtd(vtd_geo["cntyvtd"])
+    vtd_elec["cntyvtd_norm"] = _norm_cntyvtd(vtd_elec["cntyvtd"])
+
+    # Optional: quick visibility on coverage
+    geo_n = vtd_geo["cntyvtd_norm"].notna().sum()
+    elec_n = vtd_elec["cntyvtd_norm"].notna().sum()
+    print(f"[INFO] VTD keys — geo: {geo_n} non-null, elections: {elec_n} non-null")
+
+    # Merge on the normalized key, keep the original cntyvtd from geometry as the canonical label
+    vtd_with_votes = (
+        vtd_geo.merge(
+            vtd_elec.drop(columns=["cntyvtd"]),  # avoid dup column
+            on="cntyvtd_norm",
+            how="left",
+            suffixes=("", "_elec"),
+        )
+        .drop(columns=["cntyvtd_norm"])
+        .to_crs(AREA_CRS)
+    )
+
+    # If you prefer, you can re-create a clean canonical cntyvtd too:
+    vtd_with_votes["cntyvtd"] = _norm_cntyvtd(vtd_with_votes["cntyvtd"])
+
+    # Ensure districts are projected to the same equal-area CRS
+    districts_proj = districts_proj.to_crs(AREA_CRS)
+
+    # Vote columns present on the VTD table (before any overlay)
+    vote_cols_base = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
+                      if c in vtd_with_votes.columns]
+
+    # If no vote columns exist, create empty outputs aligned to districts and skip heavy work
+    if not vote_cols_base:
+        votes_by_dist = pd.DataFrame(index=districts_proj.index,
+                                     columns=["dem_votes", "rep_votes", "third_party_votes", "total_votes"])
+        part = pd.DataFrame(index=districts_proj.index, columns=["dem_share", "rep_share", "two_party_dem_share"])
     else:
-        part["dem_share"] = pd.NA
-        part["rep_share"] = pd.NA
+        # 0) Keys tidy + memory-friendly dtypes
+        vtd_with_votes["cntyvtd"] = vtd_with_votes["cntyvtd"].astype(str)
+
+        # Keep only what we need before spatial ops (shrinks memory)
+        vtd_cols_keep = ["cntyvtd", "geometry"] + vote_cols_base
+        vtd_compact = vtd_with_votes.loc[:, vtd_cols_keep].copy()
+
+        # 1) Prefilter candidate overlaps to reduce overlay size
+        possible = gpd.sjoin(
+            vtd_compact[["cntyvtd", "geometry"]],
+            districts_proj[["geometry"]].reset_index(names="district_idx"),
+            how="inner",
+            predicate="intersects",
+        )
+        pairs = possible[["cntyvtd", "district_idx"]].drop_duplicates()
+
+        # Subset to just the VTDs that actually touch a district
+        vtd_subset = vtd_compact[vtd_compact["cntyvtd"].isin(pairs["cntyvtd"])].copy()
+        d_sub = districts_proj[["geometry"]].reset_index(names="district_idx")
+
+        # 2) Precise intersections
+        vtd_district_intersections = gpd.overlay(vtd_subset, d_sub, how="intersection", keep_geom_type=True)
+
+        if vtd_district_intersections.empty:
+            votes_by_dist = pd.DataFrame(index=districts_proj.index, columns=vote_cols_base).fillna(0)
+            part = pd.DataFrame(index=districts_proj.index, columns=["dem_share", "rep_share", "two_party_dem_share"])
+        else:
+            # 3) UNIQUE VTD areas
+            vtd_areas = (
+                vtd_with_votes[["cntyvtd", "geometry"]]
+                .drop_duplicates("cntyvtd")
+                .set_index("cntyvtd")
+                .geometry.area
+                .rename("vtd_area")
+            )
+
+            # 4) Map areas (avoid giant join indexers)
+            vtd_district_intersections["vtd_area"] = vtd_district_intersections["cntyvtd"].map(vtd_areas)
+
+            # Intersection area, weights, guards
+            vtd_district_intersections["inter_area"] = vtd_district_intersections.geometry.area
+            eps = 1e-9
+            vtd_district_intersections = vtd_district_intersections.loc[
+                vtd_district_intersections["vtd_area"] > eps
+            ].copy()
+
+            vtd_district_intersections["weight"] = (
+                vtd_district_intersections["inter_area"] / vtd_district_intersections["vtd_area"]
+            ).clip(lower=0, upper=1)
+
+            # 5) Apply weights to vote columns and aggregate
+            vote_cols = [c for c in vote_cols_base if c in vtd_district_intersections.columns]
+            for col in vote_cols:
+                vtd_district_intersections[col] = (
+                    vtd_district_intersections[col].fillna(0) * vtd_district_intersections["weight"]
+                )
+
+            votes_by_dist = (
+                vtd_district_intersections.groupby("district_idx", observed=True)[vote_cols]
+                .sum(min_count=1)
+                .reindex(districts_proj.reset_index(names="district_idx")["district_idx"], fill_value=0)
+            )
+
+            # Shares
+            part = pd.DataFrame(index=votes_by_dist.index)
+            if {"dem_votes", "rep_votes"}.issubset(votes_by_dist.columns):
+                tot = (
+                    votes_by_dist["total_votes"]
+                    if "total_votes" in votes_by_dist.columns
+                    else (votes_by_dist["dem_votes"] + votes_by_dist["rep_votes"] + votes_by_dist.get(
+                        "third_party_votes", 0))
+                )
+                valid = tot > 0
+                part["dem_share"] = (votes_by_dist["dem_votes"] / tot).where(valid)
+                part["rep_share"] = (votes_by_dist["rep_votes"] / tot).where(valid)
+                part["two_party_dem_share"] = (
+                    votes_by_dist["dem_votes"] / (votes_by_dist["dem_votes"] + votes_by_dist["rep_votes"])
+                ).where((votes_by_dist["dem_votes"] + votes_by_dist["rep_votes"]) > 0)
+            else:
+                part["dem_share"] = pd.NA
+                part["rep_share"] = pd.NA
+                part["two_party_dem_share"] = pd.NA
 
     # (C) Compactness on districts
     cmpx = compute_compactness(districts_proj)
@@ -404,7 +591,6 @@ def build_final(
 
 
 # ---------------- CLI ----------------
-# Now accepts FIVE explicit input paths instead of a directory scan
 def main():
     ap = argparse.ArgumentParser(description="ETL + final 38-district dataset")
     ap.add_argument("--districts", type=Path, required=True, help="Path to district polygons file (SHP/GPKG/GeoParquet)")
@@ -412,6 +598,8 @@ def main():
     ap.add_argument("--vtds", type=Path, required=True, help="Path to VTD geometries file (SHP/GPKG/GeoParquet)")
     ap.add_argument("--pl94", type=Path, required=True, help="Path to PL-94 attributes file (CSV/TSV/Parquet/TXT)")
     ap.add_argument("--elections", type=Path, required=True, help="Path to VTD election results file (CSV/TSV/Parquet)")
+    ap.add_argument("--elections-office", type=str, default="President",
+                    help="Contest to aggregate for elections cleaning (e.g., 'President', 'U.S. Sen'). Default: President")
 
     ap.add_argument("--data-processed-tabular", type=Path, required=True, help="Output folder for cleaned Parquet")
     ap.add_argument("--data-processed-geospatial", type=Path, required=True, help="Output folder for cleaned GeoParquet")
@@ -420,9 +608,15 @@ def main():
 
     input_files = [args.districts, args.census, args.vtds, args.pl94, args.elections]
 
-    run_etl(input_files, args.data_processed_tabular, args.data_processed_geospatial, args.sqlite)
+    run_etl(
+        input_files,
+        args.data_processed_tabular,
+        args.data_processed_geospatial,
+        args.sqlite,
+        elections_office=args.elections_office,
+    )
 
-    # Derive dataset keys from stems for Stage 2
+    # Derive dataset keys from stems for Stage 1
     dk, ck, vk, pk, ek = [dataset_key(p) for p in input_files]
 
     final = build_final(
@@ -446,3 +640,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
