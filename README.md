@@ -179,7 +179,7 @@ pip install -r requirements.txt
 ```
 python etl_pipeline.py \
   --districts data/interim/districts_clean.gpkg \
-  --census data/interim/texas_census_blocks_clean.gpkg \
+  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp \
   --vtds data/interim/vtds_geo_clean.gpkg \
   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
   --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv \
