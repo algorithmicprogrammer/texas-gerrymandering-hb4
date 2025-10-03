@@ -178,7 +178,7 @@ pip install -r requirements.txt
 6. Run ETL pipeline.
 ```
 python etl_pipeline.py \
-  --districts data/interim/districts_clean.gpkg \
+  --districts data/raw/PLANC2333/PLANC2333.shp \
   --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp \
   --vtds data/interim/vtds_geo_clean.gpkg \
   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
