@@ -163,6 +163,57 @@ def normalize_vtd_key(df: pd.DataFrame, prefer="cntyvtd") -> pd.DataFrame:
             return df if c == prefer else df.rename(columns={c: prefer})
     raise AssertionError("No recognizable VTD key (cntyvtd/cntyvtdkey/…)")
 
+# --- Robust CNTY+VTD key builders (canonical: CCC + DDDD + optional trailing letters) ---
+def _std_vtd_code(vtd_raw: pd.Series) -> pd.Series:
+    """
+    Normalize precinct code to 4-digit + optional letter suffix.
+    Keeps letters at the END (e.g., '1A' → '0001A', '12' → '0012').
+    Removes spaces/dashes/punctuation.
+    """
+    s = vtd_raw.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+    letters = s.str.extract(r"([A-Z]+)$", expand=False).fillna("")      # trailing letters, if any
+    digits  = s.str.replace(r"[A-Z]+$", "", regex=True)                 # leading digits
+    digits = digits.where(digits.str.len() > 0, pd.NA)
+    digits = digits.mask(digits.isna(), None)
+    digits = digits.apply(lambda x: None if x is None else x.zfill(4))  # 4-digit pad
+    out = pd.Series(digits, index=s.index).fillna("") + letters
+    return out.replace({"": pd.NA})
+
+def _std_cnty_code_from_cnty(cnty_raw: pd.Series) -> pd.Series:
+    """Normalize numeric CNTY (1..254) to 3-digit zero-padded string."""
+    s = cnty_raw.astype(str).str.replace(r"[^0-9]", "", regex=True)
+    s = s.str.lstrip("0").where(lambda x: x.str.len() > 0, "0")
+    return s.str.zfill(3)
+
+def _std_cnty_code_from_fips(fips_raw: pd.Series) -> pd.Series:
+    """Normalize FIPS to 3-digit county code: last 3 of 5-digit (e.g., 48001→001), or pad 3 if shorter."""
+    s = fips_raw.astype(str).str.replace(r"[^0-9]", "", regex=True)
+    return s.apply(lambda x: x[-3:] if len(x) >= 3 else x.zfill(3))
+
+def build_cntyvtd_from_parts(cnty_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
+    cnty3 = _std_cnty_code_from_cnty(cnty_series)
+    vtd4  = _std_vtd_code(vtd_series)
+    out = cnty3 + vtd4.fillna("")
+    return out.replace({"": pd.NA})
+
+def build_cntyvtd_from_fips_vtd(fips_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
+    cnty3 = _std_cnty_code_from_fips(fips_series)
+    vtd4  = _std_vtd_code(vtd_series)
+    out = cnty3 + vtd4.fillna("")
+    return out.replace({"": pd.NA})
+
+def normalize_cntyvtd_safely(key_series: pd.Series) -> pd.Series:
+    """
+    Canonicalize a prebuilt cntyvtd to CCC + DDDD + optional letters.
+    If it doesn't parse, return NA so we can rebuild from parts when possible.
+    """
+    s = key_series.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+    m = s.str.extract(r"^(?P<cnty>\d{1,3})(?P<vtd>\d{1,4})(?P<suf>[A-Z]*)$")
+    bad = m.isna().any(axis=1)
+    m.loc[~bad, "cnty"] = m.loc[~bad, "cnty"].str.zfill(3)
+    m.loc[~bad, "vtd"]  = m.loc[~bad, "vtd"].str.zfill(4)
+    out = (m["cnty"] + m["vtd"] + m["suf"]).where(~bad)
+    return out
 
 # --------- NEW: guardrail — prevent metric math in geographic CRS ---------
 def assert_projected_planar(gdf: "gpd.GeoDataFrame", where: str = "") -> None:
@@ -464,6 +515,59 @@ def build_final(
     pl94 = unify_pl94_schema(pl94)
     vtd_elec = stdcols(pd.read_parquet(elect_fp))
 
+    # ----- Build a canonical cntyvtd_std on BOTH sides -----
+    vtd_geo = vtd_geo.copy()
+    vtd_elec = vtd_elec.copy()
+
+    # Geo side: prefer CNTY + VTD if available; else parse existing cntyvtd
+    if {"cnty", "vtd"} <= set(vtd_geo.columns):
+        vtd_geo["cntyvtd_std"] = build_cntyvtd_from_parts(vtd_geo["cnty"], vtd_geo["vtd"])
+    elif "cntyvtd" in vtd_geo.columns:
+        vtd_geo["cntyvtd_std"] = normalize_cntyvtd_safely(vtd_geo["cntyvtd"])
+    else:
+        raise ValueError("VTD geometry lacks CNTY/VTD or CNTYVTD to build a key.")
+
+    # Elections side: prefer existing cntyvtd from the cleaned wide table; lightly standardize only.
+    if "cntyvtd" in vtd_elec.columns:
+        vtd_elec["cntyvtd_std"] = (
+            vtd_elec["cntyvtd"]
+            .astype(str).str.strip().str.upper()
+            .str.replace(r"[^A-Z0-9]", "", regex=True)  # drop spaces/dashes/punct ONLY
+        )
+    else:
+        # Fallback only if cntyvtd truly missing (rare after Stage 1)
+        if {"fips", "vtd"} <= set(vtd_elec.columns):
+            vtd_elec["cntyvtd_std"] = build_cntyvtd_from_fips_vtd(vtd_elec["fips"], vtd_elec["vtd"])
+        else:
+            raise ValueError("Elections file lacks cntyvtd (and FIPS/VTD) to build a key.")
+
+    # Drop rows with missing standardized keys (rare, but avoids NA-joins)
+    vtd_geo  = vtd_geo.loc[vtd_geo["cntyvtd_std"].notna()].copy()
+    vtd_elec = vtd_elec.loc[vtd_elec["cntyvtd_std"].notna()].copy()
+
+    print(f"[INFO] VTD keys (standardized) — geo: {vtd_geo['cntyvtd_std'].nunique()} unique, "
+          f"elections: {vtd_elec['cntyvtd_std'].nunique()} unique")
+
+
+    # If elections file lacks a unified cntyvtd key, build it from county + precinct
+    if "cntyvtd" not in vtd_elec.columns and {"cnty", "vtd"} <= set(vtd_elec.columns):
+        # Common TLC pattern is county code + zero-padded precinct id.
+        # If your source already has combined keys, this block is skipped.
+        vtd_elec = vtd_elec.copy()
+        vtd_elec["cnty"] = (
+            vtd_elec["cnty"]
+            .astype(str).str.strip().str.upper()
+            .str.replace(r"[^A-Z0-9]", "", regex=True)
+        )
+        vtd_elec["vtd"] = (
+            vtd_elec["vtd"]
+            .astype(str).str.strip().str.upper()
+            .str.replace(r"[^A-Z0-9]", "", regex=True)
+        )
+        # Zero-padding widths vary by source; 3+4 works for many TLC exports.
+        # If join rate is still low, try removing zfill() or adjusting widths.
+        vtd_elec["cntyvtd"] = vtd_elec["cnty"].str.zfill(3) + vtd_elec["vtd"].str.zfill(4)
+
     # 🔧 Ensure geoid20 is 15-digit string on BOTH sides before merge
     census_geo = ensure_geoid20_str(census_geo)
     pl94 = ensure_geoid20_str(pl94)
@@ -524,40 +628,23 @@ def build_final(
     for out_name, src_col in PL94_RACE_VAP.items():
         race_pct[out_name] = (agg[src_col] / den).where(den > 0)
 
-    # --- (B) VTD geo + VTD election on cntyvtd → area-weighted to districts ---
-    vtd_geo = normalize_vtd_key(vtd_geo, "cntyvtd")
-    vtd_elec = normalize_vtd_key(vtd_elec, "cntyvtd")
-
-    def _norm_cntyvtd(s: pd.Series) -> pd.Series:
-        return (
-            s.astype(str)
-            .str.strip()
-            .str.replace(r"\.0$", "", regex=True)
-            .str.replace(r"[^\d]", "", regex=True)
-            .str.lstrip("0")
-            .replace({"": pd.NA})
-        )
-
-    vtd_geo = vtd_geo.copy()
-    vtd_elec = vtd_elec.copy()
-    vtd_geo["cntyvtd_norm"] = _norm_cntyvtd(vtd_geo["cntyvtd"])
-    vtd_elec["cntyvtd_norm"] = _norm_cntyvtd(vtd_elec["cntyvtd"])
-
-    geo_n = vtd_geo["cntyvtd_norm"].notna().sum()
-    elec_n = vtd_elec["cntyvtd_norm"].notna().sum()
-    print(f"[INFO] VTD keys — geo: {geo_n} non-null, elections: {elec_n} non-null")
-
+    # --- (B) VTD geo + VTD election on standardized cntyvtd_std → area-weighted to districts ---
+    # (We no longer need normalize_vtd_key/_norm_cntyvtd here.)
     vtd_with_votes = (
         vtd_geo.merge(
-            vtd_elec.drop(columns=["cntyvtd"]),
-            on="cntyvtd_norm",
+            vtd_elec.drop(columns=[c for c in ["cntyvtd", "cnty", "vtd", "fips"] if c in vtd_elec.columns]),
+            on="cntyvtd_std",
             how="left",
             suffixes=("", "_elec"),
         )
-        .drop(columns=["cntyvtd_norm"])
         .to_crs(AREA_CRS)
     )
     assert_projected_planar(vtd_with_votes, "vtd→districts")
+
+    # For the rest of your pipeline (which expects a column named 'cntyvtd'),
+    # just alias cntyvtd_std → cntyvtd so you don't have to rewrite later code.
+    vtd_with_votes["cntyvtd"] = vtd_with_votes["cntyvtd_std"]
+
 
     districts_proj = districts_proj.to_crs(AREA_CRS)
     assert_projected_planar(districts_proj, "vtd→districts")
@@ -570,7 +657,6 @@ def build_final(
                                      columns=["dem_votes", "rep_votes", "third_party_votes", "total_votes"])
         part = pd.DataFrame(index=districts_proj.index, columns=["dem_share", "rep_share", "two_party_dem_share"])
     else:
-        vtd_with_votes["cntyvtd"] = _norm_cntyvtd(vtd_with_votes["cntyvtd"])
         vtd_cols_keep = ["cntyvtd", "geometry"] + vote_cols_base
         vtd_compact = vtd_with_votes.loc[:, vtd_cols_keep].copy()
 
@@ -641,6 +727,54 @@ def build_final(
                 part["dem_share"] = pd.NA
                 part["rep_share"] = pd.NA
                 part["two_party_dem_share"] = pd.NA
+
+
+    # --- Diagnostics for zero-vote districts ---
+    if 'total_votes' in votes_by_dist.columns:
+        tot = votes_by_dist['total_votes']
+    else:
+        tot = votes_by_dist.get('dem_votes', 0) + votes_by_dist.get('rep_votes', 0) + votes_by_dist.get('third_party_votes', 0)
+
+    zero_vote_districts = list(votes_by_dist.index[tot.fillna(0) == 0])
+    print(f"[DIAG] Districts with zero total votes (shares become NA): {zero_vote_districts}")
+
+    # How many VTDs intersected each district?
+    vtds_per_dist = possible[['district_idx','cntyvtd']].drop_duplicates().groupby('district_idx').size()
+    print("[DIAG] Example intersect counts (first 10):")
+    print(vtds_per_dist.head(10))
+
+    # How many of those VTDs had matched vote rows (all vote cols non-null)?
+    vote_cols = [c for c in ["dem_votes","rep_votes","third_party_votes","total_votes"] if c in vtd_with_votes.columns]
+    had_votes = vtd_with_votes.dropna(subset=vote_cols, how='all')['cntyvtd'].unique()
+    matched_per_dist = possible[possible['cntyvtd'].isin(had_votes)].groupby('district_idx')['cntyvtd'].nunique()
+    print("[DIAG] Example matched-vote VTD counts (first 10):")
+    print(matched_per_dist.head(10))
+
+    # --- Extra diagnostics: join coverage & samples ---
+    vote_cols = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"] if
+                 c in vtd_with_votes.columns]
+
+    total_vtds = len(vtd_with_votes)
+    matched_mask = vtd_with_votes[vote_cols].notna().any(axis=1)
+    matched_vtds = int(matched_mask.sum())
+    print(f"[DIAG] VTDs with any matched votes: {matched_vtds}/{total_vtds} "
+          f"({matched_vtds / total_vtds:.1%})")
+
+    # Show a few unmatched VTD keys to spot a pattern
+    unmatched_keys = vtd_with_votes.loc[~matched_mask, "cntyvtd"].dropna().astype(str).head(20).tolist()
+    print("[DIAG] Sample unmatched VTD keys (cntyvtd):", unmatched_keys)
+
+    # Per-problem-district matched counts (convert district_idx->1-based ID for readability)
+    problem_idxs = [1, 5, 6, 19, 23, 29, 32, 37]
+    per_dist = possible[['district_idx', 'cntyvtd']].drop_duplicates()
+    per_dist['has_votes'] = per_dist['cntyvtd'].isin(vtd_with_votes.loc[matched_mask, 'cntyvtd'])
+    summary = (per_dist.groupby('district_idx')['has_votes']
+               .agg(['sum', 'count'])
+               .loc[problem_idxs]
+               .rename(columns={'sum': 'matched_vtds', 'count': 'intersecting_vtds'}))
+    summary['district_id'] = summary.index + 1
+    print("[DIAG] Problem districts — matched/total VTDs:")
+    print(summary[['district_id', 'matched_vtds', 'intersecting_vtds']])
 
     # (C) Compactness on districts
     cmpx = compute_compactness(districts_proj)
