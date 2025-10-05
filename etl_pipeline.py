@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine
 
 # ---------------- Geo deps ----------------
@@ -155,16 +156,13 @@ def normalize_vtd_key(df: pd.DataFrame, prefer="cntyvtd") -> pd.DataFrame:
 
 
 def _std_vtd_code(vtd_raw: pd.Series) -> pd.Series:
-    """
-    Make VTD a 4-digit code + optional trailing letters (suffix preserved).
-    E.g., '1A' -> '0001A', '12' -> '0012', '0034' -> '0034'
-    """
     s = vtd_raw.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
     letters = s.str.extract(r"([A-Z]+)$", expand=False).fillna("")
     digits  = s.str.replace(r"[A-Z]+$", "", regex=True)
     digits = digits.where(digits.str.len() > 0, pd.NA)
     digits = digits.mask(digits.isna(), None)
-    digits = digits.apply(lambda x: None if x is None else x.zfill(4))
+    # pad to 5 (Texas often uses 5-digit VTDs in larger counties)
+    digits = digits.apply(lambda x: None if x is None else x.zfill(5))
     out = pd.Series(digits, index=s.index).fillna("") + letters
     return out.replace({"": pd.NA})
 
@@ -182,41 +180,35 @@ def _std_cnty_code_from_fips(fips_raw: pd.Series) -> pd.Series:
 
 def build_cntyvtd_from_parts(cnty_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
     cnty3 = _std_cnty_code_from_cnty(cnty_series)
-    vtd4  = _std_vtd_code(vtd_series)
-    out = cnty3 + vtd4.fillna("")
+    vtd5  = _std_vtd_code(vtd_series)  # now 5-digit padded
+    out = cnty3 + vtd5.fillna("")
     return out.replace({"": pd.NA})
 
 
 def build_cntyvtd_from_fips_vtd(fips_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
     cnty3 = _std_cnty_code_from_fips(fips_series)
-    vtd4  = _std_vtd_code(vtd_series)
-    out = cnty3 + vtd4.fillna("")
+    vtd5  = _std_vtd_code(vtd_series)  # now 5-digit padded
+    out = cnty3 + vtd5.fillna("")
     return out.replace({"": pd.NA})
 
 
 def normalize_cntyvtd_safely(key_series: pd.Series) -> pd.Series:
-    """
-    Canonicalize a prebuilt cntyvtd to CCC + DDDD + optional letters.
-    Handles optional Texas state FIPS '48' prefix (e.g., 480010010 -> 0010010).
-    """
     s = (
         key_series.astype(str)
         .str.strip().str.upper()
         .str.replace(r"[^A-Z0-9]", "", regex=True)
     )
-    # Try with optional leading '48'
     m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
-
     bad = m.isna().any(axis=1)
-    # Fallback: no '48' assumption
     if bad.any():
         m2 = s[bad].str.extract(r"^(?P<cnty>\d{1,3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
         m.loc[bad, ["cnty", "vtd", "suf"]] = m2[["cnty", "vtd", "suf"]]
     bad = m.isna().any(axis=1)
     m.loc[~bad, "cnty"] = m.loc[~bad, "cnty"].astype(str).str.zfill(3)
-    m.loc[~bad, "vtd"]  = m.loc[~bad, "vtd"].astype(str).str.zfill(4)
+    m.loc[~bad, "vtd"]  = m.loc[~bad, "vtd"].astype(str).str.zfill(5)   # ← pad to 5
     out = (m["cnty"] + m["vtd"] + m["suf"].fillna("")).where(~bad)
     return out
+
 
 def _last4_elec_key(s: pd.Series) -> pd.Series:
     """
@@ -232,6 +224,12 @@ def _last4_elec_key(s: pd.Series) -> pd.Series:
     out.loc[ok] = m.loc[ok, "cnty"].astype(str).str.zfill(3) + last4 + m.loc[ok, "suf"].fillna("")
     return out
 
+COUNTY_NAME_TO_FIPS = {
+    # Add as needed — we only NEED Bexar to fix TX-20
+    "BEXAR": "029",
+    # (Optional) A few big ones:
+    "HARRIS": "201", "DALLAS": "113", "TARRANT": "439", "TRAVIS": "453",
+}
 
 
 # =================== CRS Guardrail ===================
@@ -353,6 +351,160 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
               t["office"].astype(str).str.strip().value_counts().head(20).to_string())
     except Exception:
         pass
+
+    # === PATCH 1: County→FIPS + robust elections VTD key build ===================
+    import numpy as np
+    import re
+
+    def _norm_name(x):
+        if pd.isna(x): return x
+        return str(x).strip().title()
+
+    # Minimal mapping; extend if needed (you already have Bexar here)
+    COUNTY_NAME_TO_FIPS = {
+        "Bexar": "029", "Harris": "201", "Dallas": "113", "Tarrant": "439", "Travis": "453",
+        "Collin": "085", "Denton": "121", "Hidalgo": "215", "El Paso": "141", "Fort Bend": "157",
+        "Williamson": "491", "Montgomery": "339", "Cameron": "061", "Nueces": "355",
+        "Galveston": "167", "Brazoria": "039", "Lubbock": "303", "Bell": "027",
+        "McLennan": "309", "Jefferson": "245"
+    }
+
+    # 1) Ensure 'cnty' exists (3-digit FIPS). Accept County name OR 5-digit FIPS columns.
+    name_cols = [c for c in t.columns if c.lower() in {"county", "countyname", "county_name"}]
+    five_cols = [c for c in t.columns if c.lower() in {"countyfips", "fips", "county_fips"}]
+
+    if "cnty" not in t.columns:
+        t["cnty"] = pd.NA
+
+    if name_cols:
+        nm = name_cols[0]
+        t.loc[t["cnty"].isna(), "cnty"] = t[nm].map(lambda v: COUNTY_NAME_TO_FIPS.get(_norm_name(v), pd.NA))
+
+    if five_cols:
+        cf = five_cols[0]
+        sel = t["cnty"].isna() & t[cf].notna()
+        t.loc[sel, "cnty"] = (
+            t.loc[sel, cf].astype(str).str.findall(r"\d").str.join("").str[-3:].str.zfill(3)
+        )
+
+    t["cnty"] = t["cnty"].astype(str).str.findall(r"\d").str.join("").str[-3:].str.zfill(3)
+
+    # 2) Build robust VTD digits (+ optional letter suffix) from flexible columns.
+    def _first_present(df, cols):
+        for c in cols:
+            if c in df.columns: return c
+        return None
+
+    vtd_col = _first_present(t, [
+        "VTD", "vtd", "Precinct", "precinct", "Pct", "pct", "PCT",
+        "Precinct Number", "Pct Number", "VTDNumber", "VtdNumber", "pct_number", "precinct_number"
+    ])
+
+    if vtd_col is None and "cntyvtd" in t.columns:
+        # derive digits from any existing combined key
+        t["_e_vtd_digits"] = t["cntyvtd"].astype(str).str.findall(r"\d").str.join("").str[-5:].str.zfill(5)
+    else:
+        raw = (t[vtd_col].astype(str) if vtd_col else pd.Series("", index=t.index))
+        t["_e_vtd_digits"] = raw.str.findall(r"\d").str.join("").str[-5:].str.zfill(5)
+
+    # Try to capture split/letter suffix if present
+    split_col = _first_present(t, ["Split", "split", "Suffix", "suffix", "Precinct Split", "PrecinctSplit"])
+    if split_col:
+        suf = t[split_col].astype(str).str.extract(r"([A-Za-z]+)$", expand=False).fillna("").str.upper()
+    else:
+        base_for_suffix = (t[vtd_col].astype(str) if vtd_col else pd.Series("", index=t.index))
+        suf = base_for_suffix.str.extract(r"([A-Za-z]+)$", expand=False).fillna("").str.upper()
+
+    # Make string-safe
+    t["_e_vtd_digits"] = t["_e_vtd_digits"].astype("string")
+    suf = suf.astype("string")
+    t["cnty"] = t["cnty"].astype("string")
+
+    # Compose: <3-digit cnty><5-digit vtd><suffix?>
+    t["cntyvtd"] = (t["cnty"] + t["_e_vtd_digits"] + suf).astype("string")
+    # standardized (no suffix)
+    t["cntyvtd_std"] = (t["cnty"] + t["_e_vtd_digits"]).astype("string")
+
+    # Helpful debug
+    bexar = t.loc[t["cnty"] == "029"]
+    print(f"[DEBUG] Elections rows with cnty='029' (Bexar) after build: {len(bexar)}")
+    if len(bexar):
+        print(f"[DEBUG] Sample Bexar cntyvtd: {bexar['cntyvtd'].head(10).tolist()}")
+
+    # --------------------------------------------------------------------------
+    # County name → FIPS override + key repair (helps BEXAR/029 etc.)
+    county_cols = [c for c in t.columns if c.lower() in ("county", "county_name", "cty_name")]
+    if county_cols:
+        cname = (
+            t[county_cols[0]].astype(str).str.upper()
+            .str.replace(r"[^A-Z ]", "", regex=True).str.strip()
+        )
+        cnty_from_name = cname.map(COUNTY_NAME_TO_FIPS)
+
+        # --- NEW: also recognize numeric county code columns (CountyId, CountyNumber, FIPS, etc.)
+        cnty_code_cols = [
+            c for c in t.columns
+            if c.lower() in (
+                "countyid","county_id","countynumber","county_number","countycode","county_code",
+                "fips","countyfips","county_fips","cnty_fips","cntycode","cnty_code"
+            )
+        ]
+        cnty_from_code = pd.Series(index=t.index, dtype="string")
+
+        if cnty_code_cols:
+            # Use the first matching numeric column
+            raw_code = (
+                t[cnty_code_cols[0]]
+                .astype(str)
+                .str.extract(r"(\d+)", expand=False)  # keep digits
+                .fillna("")
+            )
+            # If it's full FIPS (e.g., 48029), strip leading '48'
+            raw_code = raw_code.str.replace(r"^48(?=\d{3}$)", "", regex=True)
+            # Last 3 digits, left-pad
+            cnty_from_code = raw_code.str[-3:].str.zfill(3).astype("string")
+
+        # Prefer name mapping, else code mapping, else NA
+        cnty_best = cnty_from_name.astype("string")
+        use_code = cnty_best.isna() & cnty_from_code.notna() & cnty_from_code.str.match(r"^\d{3}$")
+        cnty_best = cnty_best.mask(use_code, cnty_from_code)
+
+        # Look for any precinct/VTD-ish column we can mine
+        vtd_candidates = [
+            "vtd", "vtdid", "vtd_id", "vtdkey", "vtd_key",
+            "precinct", "precinct_id", "precinctid", "prec_id",
+            "pct", "pctid", "pct_id", "pct_code", "pctname", "pct_name",
+            "cnty_vtd", "cntyvtdkey"
+        ]
+        vtd_src = next((c for c in vtd_candidates if c in t.columns), None)
+
+        if vtd_src:
+            t["vtd_norm"] = (
+                t[vtd_src].astype(str).str.upper()
+                .str.replace(r"[^A-Z0-9]", "", regex=True).str.strip()
+            )
+        else:
+            # fall back to using whatever is in cntyvtd for extracting digits
+            t["vtd_norm"] = t["cntyvtd"].astype(str).str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+
+        # Current parse of cntyvtd
+        parsed = normalize_cntyvtd_safely(t["cntyvtd"])
+        # Prefer 5-digit run if present, else 4
+        digs = t["vtd_norm"].str.extract(r"(?P<d5>\d{5})|(?P<d4>\d{4})", expand=True)
+        vtd_digits = digs["d5"].fillna(digs["d4"]).astype(str)
+        suf = t["vtd_norm"].str.extract(r"([A-Z]+)$", expand=False).fillna("")
+
+        needs_override = parsed.isna() & cnty_best.notna()
+        have_real_digits = vtd_digits.str.match(r"^\d{4,5}$")
+        ok_to_repair = needs_override & have_real_digits
+
+        if ok_to_repair.any():
+            d = vtd_digits.str.zfill(5)
+            repaired = (cnty_best + d + suf).astype("string")   # ← use cnty_best here
+            t["cntyvtd"] = t["cntyvtd"].astype("string")
+            t.loc[ok_to_repair, "cntyvtd"] = repaired.loc[ok_to_repair]
+
+    # --------------------------------------------------------------------------
 
     def _to_wide(sub: pd.DataFrame) -> pd.DataFrame:
         agg = sub.groupby(["cntyvtd", "party"], as_index=False)["votes"].sum()
@@ -625,7 +777,7 @@ def build_final(
         s = s.astype(str).str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
         m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,5})")
         m["cnty"] = m["cnty"].fillna("").astype(str).str.zfill(3)
-        m["vtd"]  = m["vtd"].fillna("").astype(str).str.zfill(4)
+        m["vtd"] = m["vtd"].fillna("").astype(str).str.zfill(5)  # ← pad to 5
         return (m["cnty"] + m["vtd"]).where(m["cnty"].ne("") & m["vtd"].ne(""))
 
     # Prepare base-key aggregate for ALL-offices
@@ -862,16 +1014,13 @@ def build_final(
     else:
         print("[DIAG] No VTD↔district intersections found (check CRS and geometries).")
 
-    # --- Deep dive on any districts with zero votes (e.g., idx 19 → district_id 20)
     if zero_vote_districts:
         for d_idx in zero_vote_districts:
             print(f"\n[DEEPDIAG] Investigating district_idx={d_idx} (district_id={d_idx + 1})")
-            # VTDs that geometrically intersect this district
             dvtd = (possible.loc[possible['district_idx'] == d_idx, 'cntyvtd']
                     .drop_duplicates().astype(str))
             print(f"[DEEPDIAG] Intersecting VTDs: {len(dvtd)}")
 
-            # Which of those VTDs have elections rows (any votes)?
             vote_cols_check = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
                                if c in vtd_with_votes.columns]
             if vote_cols_check:
@@ -880,31 +1029,24 @@ def build_final(
                 matched = dvtd.isin(dvtd_has_votes).sum()
                 print(f"[DEEPDIAG] Matched-vote VTDs in district: {matched}/{len(dvtd)}")
 
-            # Show a few missing keys and their counties
             missing_keys = dvtd[~dvtd.isin(vtd_with_votes.loc[has_any, 'cntyvtd'].astype(str))].head(25).tolist()
             print("[DEEPDIAG] Sample missing VTD keys:", missing_keys)
 
-            # County analysis for this district (uses standardized keys)
             def _county_from_key(s: pd.Series) -> pd.Series:
                 return s.astype(str).str.extract(r"^(?:48)?(\d{3})")[0]
 
             d_cnties_geo = _county_from_key(pd.Series(dvtd)).value_counts().sort_index()
             print("[DEEPDIAG] Counties (GEO side) in district:", d_cnties_geo.to_dict())
 
-            # Do we have those counties in elections after fallback?
             elec_keys_after = vtd_elec["cntyvtd_std"].astype(str)
             cnty_elec_after = _county_from_key(elec_keys_after).value_counts().sort_index()
             print("[DEEPDIAG] Elections rows per county (after fallback):",
                   {k: int(cnty_elec_after.get(k, 0)) for k in d_cnties_geo.index})
 
-            # Focus specifically on Bexar (029) for TX-20
             if "029" in d_cnties_geo.index:
                 in_geo_029 = set(k for k in dvtd if k.startswith("029"))
                 in_elec_029 = set(elec_keys_after[elec_keys_after.str.startswith("029")])
-                print(
-                    f"[DEEPDIAG] Bexar (029): GEO VTDs={len(in_geo_029)}; ELEC VTDs(after fallback)={len(in_elec_029)}")
-
-                # Show 15 sample GEO keys in 029 that don't appear in elections
+                print(f"[DEEPDIAG] Bexar (029): GEO VTDs={len(in_geo_029)}; ELEC VTDs(after fallback)={len(in_elec_029)}")
                 missing_029 = sorted(list(in_geo_029 - in_elec_029))[:15]
                 print("[DEEPDIAG] Sample missing Bexar (029) keys:", missing_029)
 
