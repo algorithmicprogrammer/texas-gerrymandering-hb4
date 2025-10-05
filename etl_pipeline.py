@@ -205,17 +205,33 @@ def normalize_cntyvtd_safely(key_series: pd.Series) -> pd.Series:
         .str.replace(r"[^A-Z0-9]", "", regex=True)
     )
     # Try with optional leading '48'
-    m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,4})(?P<suf>[A-Z]*)$")
+    m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
+
     bad = m.isna().any(axis=1)
     # Fallback: no '48' assumption
     if bad.any():
-        m2 = s[bad].str.extract(r"^(?P<cnty>\d{1,3})(?P<vtd>\d{1,4})(?P<suf>[A-Z]*)$")
+        m2 = s[bad].str.extract(r"^(?P<cnty>\d{1,3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
         m.loc[bad, ["cnty", "vtd", "suf"]] = m2[["cnty", "vtd", "suf"]]
     bad = m.isna().any(axis=1)
     m.loc[~bad, "cnty"] = m.loc[~bad, "cnty"].astype(str).str.zfill(3)
     m.loc[~bad, "vtd"]  = m.loc[~bad, "vtd"].astype(str).str.zfill(4)
     out = (m["cnty"] + m["vtd"] + m["suf"].fillna("")).where(~bad)
     return out
+
+def _last4_elec_key(s: pd.Series) -> pd.Series:
+    """
+    From an elections-side key that may have 5 VTD digits (CCC + DDDDD [+ SUF]),
+    build a 4-digit-compat key by taking the RIGHTMOST 4 VTD digits.
+    Returns CNTY + last4 + SUF (suffix preserved).
+    """
+    s = s.astype(str).str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+    m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
+    ok = m["cnty"].notna() & m["vtd"].notna()
+    out = pd.Series(pd.NA, index=s.index)
+    last4 = m.loc[ok, "vtd"].astype(str).str[-4:].str.zfill(4)
+    out.loc[ok] = m.loc[ok, "cnty"].astype(str).str.zfill(3) + last4 + m.loc[ok, "suf"].fillna("")
+    return out
+
 
 
 # =================== CRS Guardrail ===================
@@ -416,15 +432,28 @@ def run_etl(
 
         # Elections: tall → wide per VTD
         if path == elections_path and not is_geodf(df):
-            tdf = coerce_types_light(stdcols(df))
-            if is_tall_elections(tdf):
+            tdf_tall = coerce_types_light(stdcols(df))
+            if is_tall_elections(tdf_tall):
                 print(f"[ETL] Detected tall elections file. Cleaning office='{elections_office}' → wide VTD votes.")
                 try:
-                    tdf = clean_vtd_election_returns(tdf, target_office=elections_office)
+                    # (a) Requested office (or ALL if blank)
+                    tdf = clean_vtd_election_returns(tdf_tall, target_office=elections_office)
+                    # (b) Always also compute ALL-offices combined for Stage-2 fallback
+                    tdf_all = clean_vtd_election_returns(tdf_tall, target_office="")
                 except Exception as e:
                     raise RuntimeError(f"Failed cleaning elections file '{path.name}': {e}") from e
+            else:
+                # If it's already wide, just pass through and clone for _all
+                tdf = tdf_tall
+                tdf_all = tdf_tall.copy()
+
+            # Save both versions
             write_parquet(tdf, out_parquet_dir / f"{name}.parquet")
+            write_parquet(tdf_all, out_parquet_dir / f"{name}_all.parquet")
+
+            # Warehouse
             to_sqlite(tdf, sqlite_path, f"stg_{name}")
+            to_sqlite(tdf_all, sqlite_path, f"stg_{name}_all")
             continue
 
         # Geospatial / Tabular defaults
@@ -465,6 +494,12 @@ def build_final(
     vtds_fp      = out_geo_dir / f"{vtds_key}.parquet"
     pl94_fp      = out_parquet_dir / f"{pl94_key}.parquet"
     elect_fp     = out_parquet_dir / f"{elections_key}.parquet"
+
+    elect_all_fp = out_parquet_dir / f"{elections_key}_all.parquet"
+    if not elect_all_fp.exists():
+        raise FileNotFoundError(f"Missing ALL-offices elections file: {elect_all_fp}\n"
+                                f"(Re-run Stage 1 with the patch that writes *_all.parquet)")
+    vtd_elec_all = stdcols(pd.read_parquet(elect_all_fp))
 
     missing = [p for p in [districts_fp, census_fp, vtds_fp, pl94_fp, elect_fp] if not p.exists()]
     if missing:
@@ -517,38 +552,97 @@ def build_final(
     print(f"[INFO] VTD keys (standardized) — geo: {vtd_geo['cntyvtd_std'].nunique()} unique, "
           f"elections: {vtd_elec['cntyvtd_std'].nunique()} unique")
 
-    # Constrain elections keys to valid county prefixes seen in VTD geometry
-    valid_cnties = set(vtd_geo["cntyvtd_std"].astype(str).str[:3].unique())
-    vtd_elec = vtd_elec[vtd_elec["cntyvtd_std"].astype(str).str[:3].isin(valid_cnties)].copy()
+    # Inspect VTD lengths in elections (helps spot 5-digit codes)
+    lens = vtd_elec["cntyvtd_std"].dropna().astype(str).str.extract(r"^(?:48)?\d{3}(\d+)")[0].str.len().value_counts().sort_index()
+    print("[DIAG] Elections VTD digit lengths (post-cnty):", lens.to_dict())
 
-    # --- County coverage diagnostic (accept optional leading '48') ---
+    # Build standardized keys for ALL-offices too
+    if "cntyvtd" in vtd_elec_all.columns:
+        parsed_all = normalize_cntyvtd_safely(vtd_elec_all["cntyvtd"])
+        fallback_all = (
+            vtd_elec_all["cntyvtd"].astype(str).str.strip().str.upper()
+            .str.replace(r"[^A-Z0-9]", "", regex=True)
+        )
+        vtd_elec_all["cntyvtd_std"] = parsed_all.fillna(fallback_all)
+    elif {"fips", "vtd"} <= set(vtd_elec_all.columns):
+        vtd_elec_all["cntyvtd_std"] = build_cntyvtd_from_fips_vtd(vtd_elec_all["fips"], vtd_elec_all["vtd"])
+    else:
+        raise ValueError("ALL-offices elections file lacks cntyvtd (and FIPS/VTD) to build a key.")
+
+    # Constrain ALL-offices to valid counties (same filter you use for the requested contest)
     def _county_from_key(s: pd.Series) -> pd.Series:
         return s.astype(str).str.extract(r"^(?:48)?(\d{3})")[0]
 
-    geo_cnty = _county_from_key(vtd_geo["cntyvtd_std"])
-    elec_cnty = _county_from_key(vtd_elec["cntyvtd_std"])
+    valid_cnties = set(_county_from_key(vtd_geo["cntyvtd_std"]).dropna().unique())
+    # Constrain requested-contest elections to valid counties too
+    vtd_elec = vtd_elec[_county_from_key(vtd_elec["cntyvtd_std"]).isin(valid_cnties)].copy()
+    vtd_elec_all = vtd_elec_all[_county_from_key(vtd_elec_all["cntyvtd_std"]).isin(valid_cnties)].copy()
+
+    # --- Elections key fallback: map 5-digit VTDs to last-4 so they match the 4-digit GEO keys ---
+    geo_key_set = set(vtd_geo["cntyvtd_std"].astype(str))
+
+    def _apply_last4_fallback(elec_df: pd.DataFrame) -> pd.DataFrame:
+        elec_df = elec_df.copy()
+        # Current standardized key
+        k = elec_df["cntyvtd_std"].astype(str)
+        # Which keys miss the geo side?
+        miss = ~k.isin(geo_key_set)
+        if miss.any():
+            # Build the last-4 variant and use it ONLY where the original misses and the last-4 exists in geo
+            k_last4 = _last4_elec_key(k)
+            can_swap = miss & k_last4.notna() & k_last4.isin(geo_key_set)
+            elec_df.loc[can_swap, "cntyvtd_std"] = k_last4.loc[can_swap]
+        return elec_df
+
+    vtd_elec = _apply_last4_fallback(vtd_elec)
+    vtd_elec_all = _apply_last4_fallback(vtd_elec_all)
+
+    # --- County coverage diagnostic (counting only elections keys that also exist in geo) ---
+    geo_keys = vtd_geo["cntyvtd_std"].astype(str)
+    elec_keys = vtd_elec["cntyvtd_std"].astype(str)
+    geo_cnty = _county_from_key(geo_keys)
+    elec_cnty = _county_from_key(elec_keys)
+    elec_in_geo_mask = elec_keys.isin(set(geo_keys))
+    elec_by_cnty_in_geo = elec_cnty[elec_in_geo_mask].value_counts().sort_index()
     coverage = (
         pd.DataFrame({
             "geo_vtds": geo_cnty.value_counts().sort_index(),
-            "elec_vtds": elec_cnty.value_counts().sort_index(),
+            "elec_vtds": elec_by_cnty_in_geo,
         }).fillna(0).astype(int)
     )
     coverage["pct_covered"] = 0.0
-    mask = coverage["geo_vtds"] > 0
-    coverage.loc[mask, "pct_covered"] = (
-            coverage.loc[mask, "elec_vtds"] / coverage.loc[mask, "geo_vtds"]
-    ).round(3)
+    mask_cov = coverage["geo_vtds"] > 0
+    coverage.loc[mask_cov, "pct_covered"] = (
+        (coverage.loc[mask_cov, "elec_vtds"] / coverage.loc[mask_cov, "geo_vtds"])
+        .clip(upper=1).round(3)
+    )
 
     print("[DIAG] County VTD coverage (first 20):")
     print(coverage.head(20))
 
-    # Build a base key without trailing letter suffixes (optional '48' + 3-digit county + 1–4 digits)
+    # Build a base key without trailing letter suffixes (optional '48' + 3-digit county + 1–5 digits)
     def _base_vtd_key(s: pd.Series) -> pd.Series:
         s = s.astype(str).str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-        m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,4})")
+        m = s.str.extract(r"^(?:48)?(?P<cnty>\d{3})(?P<vtd>\d{1,5})")
         m["cnty"] = m["cnty"].fillna("").astype(str).str.zfill(3)
-        m["vtd"] = m["vtd"].fillna("").astype(str).str.zfill(4)
+        m["vtd"]  = m["vtd"].fillna("").astype(str).str.zfill(4)
         return (m["cnty"] + m["vtd"]).where(m["cnty"].ne("") & m["vtd"].ne(""))
+
+    # Prepare base-key aggregate for ALL-offices
+    vtd_elec_all["cntyvtd_base"] = _base_vtd_key(vtd_elec_all["cntyvtd_std"])
+    vote_cols_all = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes", "two_party_dem_share"]
+                     if c in vtd_elec_all.columns]
+    sum_cols_all = [c for c in vote_cols_all if c != "two_party_dem_share"]
+    elec_all_base = vtd_elec_all.dropna(subset=["cntyvtd_base"]).copy()
+    if sum_cols_all:
+        elec_all_base_agg = elec_all_base.groupby("cntyvtd_base", as_index=False)[sum_cols_all].sum(min_count=1)
+        if {"dem_votes", "rep_votes"}.issubset(elec_all_base_agg.columns):
+            twoden_all = elec_all_base_agg["dem_votes"] + elec_all_base_agg["rep_votes"]
+            elec_all_base_agg["two_party_dem_share"] = (elec_all_base_agg["dem_votes"] / twoden_all).where(twoden_all > 0)
+    else:
+        elec_all_base_agg = elec_all_base[["cntyvtd_base"]].drop_duplicates().assign(
+            dem_votes=pd.NA, rep_votes=pd.NA, third_party_votes=pd.NA, total_votes=pd.NA, two_party_dem_share=pd.NA
+        )
 
     # --- Ensure GEOID alignment for PL94 merge ---
     census_geo = ensure_geoid20_str(census_geo)
@@ -584,7 +678,7 @@ def build_final(
     blk_inter = blk_inter.merge(blk_attrs, on="geoid20", how="left")
 
     blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
-    blk_inter["blk_area"] = blk_inter["geoid20"].map(blk_area)
+    blk_inter["blk_area"] = blk_area.loc[blk_inter["geoid20"]].values
     blk_inter["inter_area"] = blk_inter.geometry.area
     blk_inter = blk_inter.loc[blk_inter["blk_area"] > 0].copy()
     blk_inter["w"] = (blk_inter["inter_area"] / blk_inter["blk_area"]).clip(0, 1)
@@ -611,13 +705,13 @@ def build_final(
     vtd_elec["cntyvtd_base"] = _base_vtd_key(vtd_elec["cntyvtd_std"])
 
     # Aggregate elections by base key (combine A/B/C variants if they exist)
-    vote_cols_all = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes", "two_party_dem_share"]
-                     if c in vtd_elec.columns]
-    sum_cols = [c for c in vote_cols_all if c != "two_party_dem_share"]
+    vote_cols_all2 = [c for c in ["dem_votes","rep_votes","third_party_votes","total_votes","two_party_dem_share"]
+                      if c in vtd_elec.columns]
+    sum_cols = [c for c in vote_cols_all2 if c != "two_party_dem_share"]
     elec_base = vtd_elec.dropna(subset=["cntyvtd_base"]).copy()
     if sum_cols:
         elec_base_agg = elec_base.groupby("cntyvtd_base", as_index=False)[sum_cols].sum(min_count=1)
-        if {"dem_votes", "rep_votes"}.issubset(elec_base_agg.columns):
+        if {"dem_votes","rep_votes"}.issubset(elec_base_agg.columns):
             twoden = elec_base_agg["dem_votes"] + elec_base_agg["rep_votes"]
             elec_base_agg["two_party_dem_share"] = (elec_base_agg["dem_votes"] / twoden).where(twoden > 0)
     else:
@@ -627,22 +721,27 @@ def build_final(
 
     # First pass: exact suffix-preserving join on cntyvtd_std
     vtd_with_votes = vtd_geo.merge(
-        vtd_elec.drop(columns=[c for c in ["cntyvtd", "cnty", "vtd", "fips"] if c in vtd_elec.columns]),
+        vtd_elec.drop(columns=[c for c in ["cntyvtd","cnty","vtd","fips"] if c in vtd_elec.columns]),
         on="cntyvtd_std", how="left", suffixes=("", "_elec")
     )
 
     # Second pass: fill any still-missing vote cells from base-key aggregates
-    vote_cols = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"] if
-                 c in vtd_with_votes.columns]
-    missing_mask = vtd_with_votes[vote_cols].isna().all(axis=1) if vote_cols else pd.Series(False,
-                                                                                            index=vtd_with_votes.index)
+    vote_cols_base = [c for c in ["dem_votes","rep_votes","third_party_votes","total_votes"] if c in vtd_with_votes.columns]
+    missing_mask = vtd_with_votes[vote_cols_base].isna().all(axis=1) if vote_cols_base else pd.Series(False, index=vtd_with_votes.index)
     if missing_mask.any():
-        filler = vtd_with_votes.loc[missing_mask, ["cntyvtd_base"]].merge(
-            elec_base_agg, on="cntyvtd_base", how="left"
-        )
-        for col in ["dem_votes", "rep_votes", "third_party_votes", "total_votes", "two_party_dem_share"]:
+        filler = vtd_with_votes.loc[missing_mask, ["cntyvtd_base"]].merge(elec_base_agg, on="cntyvtd_base", how="left")
+        for col in ["dem_votes","rep_votes","third_party_votes","total_votes","two_party_dem_share"]:
             if col in vtd_with_votes.columns and col in filler.columns:
                 vtd_with_votes.loc[missing_mask, col] = vtd_with_votes.loc[missing_mask, col].fillna(filler[col])
+
+    # Third pass: fill any remaining missing vote cells from ALL-offices aggregates
+    if missing_mask.any():
+        if "cntyvtd_base" not in vtd_with_votes.columns:
+            vtd_with_votes["cntyvtd_base"] = _base_vtd_key(vtd_with_votes["cntyvtd_std"])
+        fallback_fill = vtd_with_votes.loc[missing_mask, ["cntyvtd_base"]].merge(elec_all_base_agg, on="cntyvtd_base", how="left")
+        for col in ["dem_votes","rep_votes","third_party_votes","total_votes","two_party_dem_share"]:
+            if col in vtd_with_votes.columns and col in fallback_fill.columns:
+                vtd_with_votes.loc[missing_mask, col] = vtd_with_votes.loc[missing_mask, col].fillna(fallback_fill[col])
 
     # CRS + alias
     vtd_with_votes = vtd_with_votes.to_crs(AREA_CRS)
@@ -651,9 +750,6 @@ def build_final(
 
     districts_proj = districts_proj.to_crs(AREA_CRS)
     assert_projected_planar(districts_proj, "vtd→districts")
-
-    vote_cols_base = [c for c in ["dem_votes","rep_votes","third_party_votes","total_votes"]
-                      if c in vtd_with_votes.columns]
 
     if not vote_cols_base:
         votes_by_dist = pd.DataFrame(index=districts_proj.index,
@@ -747,20 +843,17 @@ def build_final(
         matched_per_dist = possible[possible['cntyvtd'].isin(had_votes)].groupby('district_idx')['cntyvtd'].nunique()
         print("[DIAG] Example matched-vote VTD counts (first 10):"); print(matched_per_dist.head(10))
 
-        # --- Replace the crashing print with this safe version ---
         total_vtds = len(vtd_with_votes)
-        matched_mask = vtd_with_votes[vote_cols].notna().any(axis=1) if vote_cols else pd.Series(False,
-                                                                                                 index=vtd_with_votes.index)
-        matched_vtds = int(matched_mask.sum()) if vote_cols else 0
+        matched_mask_any = vtd_with_votes[vote_cols].notna().any(axis=1) if vote_cols else pd.Series(False, index=vtd_with_votes.index)
+        matched_vtds = int(matched_mask_any.sum()) if vote_cols else 0
         pct_str = f"{matched_vtds / total_vtds:.1%}" if total_vtds else "0.0%"
         print(f"[DIAG] VTDs with any matched votes: {matched_vtds}/{total_vtds} ({pct_str})")
-        unmatched_keys = vtd_with_votes.loc[~matched_mask, "cntyvtd"].dropna().astype(str).head(
-            20).tolist() if vote_cols else []
+        unmatched_keys = vtd_with_votes.loc[~matched_mask_any, "cntyvtd"].dropna().astype(str).head(20).tolist() if vote_cols else []
         print("[DIAG] Sample unmatched VTD keys (cntyvtd):", unmatched_keys)
 
         problem_idxs = zero_vote_districts
         per_dist = possible[['district_idx','cntyvtd']].drop_duplicates()
-        per_dist['has_votes'] = per_dist['cntyvtd'].isin(vtd_with_votes.loc[matched_mask,'cntyvtd']) if vote_cols else False
+        per_dist['has_votes'] = per_dist['cntyvtd'].isin(vtd_with_votes.loc[matched_mask_any,'cntyvtd']) if vote_cols else False
         summary = (per_dist.groupby('district_idx')['has_votes']
                    .agg(['sum','count']).loc[problem_idxs]
                    .rename(columns={'sum':'matched_vtds','count':'intersecting_vtds'}))
@@ -768,6 +861,52 @@ def build_final(
         print("[DIAG] Problem districts — matched/total VTDs:"); print(summary[['district_id','matched_vtds','intersecting_vtds']])
     else:
         print("[DIAG] No VTD↔district intersections found (check CRS and geometries).")
+
+    # --- Deep dive on any districts with zero votes (e.g., idx 19 → district_id 20)
+    if zero_vote_districts:
+        for d_idx in zero_vote_districts:
+            print(f"\n[DEEPDIAG] Investigating district_idx={d_idx} (district_id={d_idx + 1})")
+            # VTDs that geometrically intersect this district
+            dvtd = (possible.loc[possible['district_idx'] == d_idx, 'cntyvtd']
+                    .drop_duplicates().astype(str))
+            print(f"[DEEPDIAG] Intersecting VTDs: {len(dvtd)}")
+
+            # Which of those VTDs have elections rows (any votes)?
+            vote_cols_check = [c for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
+                               if c in vtd_with_votes.columns]
+            if vote_cols_check:
+                has_any = vtd_with_votes[vote_cols_check].notna().any(axis=1)
+                dvtd_has_votes = set(vtd_with_votes.loc[has_any, 'cntyvtd'].astype(str))
+                matched = dvtd.isin(dvtd_has_votes).sum()
+                print(f"[DEEPDIAG] Matched-vote VTDs in district: {matched}/{len(dvtd)}")
+
+            # Show a few missing keys and their counties
+            missing_keys = dvtd[~dvtd.isin(vtd_with_votes.loc[has_any, 'cntyvtd'].astype(str))].head(25).tolist()
+            print("[DEEPDIAG] Sample missing VTD keys:", missing_keys)
+
+            # County analysis for this district (uses standardized keys)
+            def _county_from_key(s: pd.Series) -> pd.Series:
+                return s.astype(str).str.extract(r"^(?:48)?(\d{3})")[0]
+
+            d_cnties_geo = _county_from_key(pd.Series(dvtd)).value_counts().sort_index()
+            print("[DEEPDIAG] Counties (GEO side) in district:", d_cnties_geo.to_dict())
+
+            # Do we have those counties in elections after fallback?
+            elec_keys_after = vtd_elec["cntyvtd_std"].astype(str)
+            cnty_elec_after = _county_from_key(elec_keys_after).value_counts().sort_index()
+            print("[DEEPDIAG] Elections rows per county (after fallback):",
+                  {k: int(cnty_elec_after.get(k, 0)) for k in d_cnties_geo.index})
+
+            # Focus specifically on Bexar (029) for TX-20
+            if "029" in d_cnties_geo.index:
+                in_geo_029 = set(k for k in dvtd if k.startswith("029"))
+                in_elec_029 = set(elec_keys_after[elec_keys_after.str.startswith("029")])
+                print(
+                    f"[DEEPDIAG] Bexar (029): GEO VTDs={len(in_geo_029)}; ELEC VTDs(after fallback)={len(in_elec_029)}")
+
+                # Show 15 sample GEO keys in 029 that don't appear in elections
+                missing_029 = sorted(list(in_geo_029 - in_elec_029))[:15]
+                print("[DEEPDIAG] Sample missing Bexar (029) keys:", missing_029)
 
     # (C) Compactness
     cmpx = compute_compactness(districts_proj)
@@ -779,8 +918,9 @@ def build_final(
     final = final.join(cmpx).join(race_pct).join(part[["dem_share","rep_share"]]).sort_index()
     assert len(final) == 38, f"Expected 38 districts, found {len(final)}"
 
-    # Optional: fill NA vote shares with 0.0
-    # final[["dem_share","rep_share"]] = final[["dem_share","rep_share"]].fillna(0.0)
+    # --- Fill missing vote shares with 0.0 ---
+    if {"dem_share","rep_share"}.issubset(final.columns):
+        final[["dem_share","rep_share"]] = final[["dem_share","rep_share"]].fillna(0.0)
 
     return final
 
