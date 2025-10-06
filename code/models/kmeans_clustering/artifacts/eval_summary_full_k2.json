@@ -1,0 +1,14 @@
+{
+  "variant": "full",
+  "k": 2,
+  "n_samples": 38,
+  "n_features": 10,
+  "inertia": 280.3736082858243,
+  "silhouette": 0.2831376329426156,
+  "calinski_harabasz": 12.792038892812087,
+  "davies_bouldin": 1.529870169167291,
+  "sizes": {
+    "0": 13,
+    "1": 25
+  }
+}

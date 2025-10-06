@@ -1,15 +1,15 @@
 {
   "variant": "full",
-  "k": 5,
+  "k": 2,
   "random_state": 42,
   "n_init": "10",
-  "inertia": 128.5997232347947,
-  "silhouette": 0.2787602678607726,
+  "inertia": 280.3736082858243,
+  "silhouette": 0.2831376329426156,
   "n_samples": 38,
   "n_features": 10,
   "ids_file": "artifacts/district_ids.csv",
   "X_file": "artifacts/X_full_scaled.npz",
-  "model_file": "artifacts/kmeans_full_k5.joblib",
-  "labels_file": "artifacts/clusters_full_k5.csv",
+  "model_file": "artifacts/kmeans_full_k2.joblib",
+  "labels_file": "artifacts/clusters_full_k2.csv",
   "id_col": "district_id"
 }
