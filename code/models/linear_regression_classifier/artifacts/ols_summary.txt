@@ -1,0 +1,33 @@
+                            OLS Regression Results                            
+==============================================================================
+Dep. Variable:                      y   R-squared:                       0.677
+Model:                            OLS   Adj. R-squared:                  0.516
+Method:                 Least Squares   F-statistic:                     4.194
+Date:                Wed, 08 Oct 2025   Prob (F-statistic):            0.00469
+Time:                        16:07:48   Log-Likelihood:                 1.0381
+No. Observations:                  28   AIC:                             17.92
+Df Residuals:                      18   BIC:                             31.25
+Df Model:                           9                                         
+Covariance Type:            nonrobust                                         
+===================================================================================================
+                                      coef    std err          t      P>|t|      [0.025      0.975]
+---------------------------------------------------------------------------------------------------
+const                              -0.0462      0.531     -0.087      0.932      -1.162       1.069
+cat__majority_race_pct_hispanic     0.2437      0.531      0.459      0.652      -0.872       1.360
+cat__majority_race_pct_white        0.2916      0.601      0.485      0.634      -0.972       1.555
+num__polsby_popper                  0.0738      0.542      0.136      0.893      -1.064       1.212
+num__schwartzberg                  -0.0472      0.619     -0.076      0.940      -1.348       1.253
+num__convex_hull_ratio             -0.0904      0.117     -0.774      0.449      -0.336       0.155
+num__reock                          0.0851      0.082      1.037      0.313      -0.087       0.257
+num__pct_black                      0.3582      0.150      2.391      0.028       0.043       0.673
+num__pct_asian                      0.1779      0.074      2.404      0.027       0.022       0.333
+num__pct_hispanic                   0.2374      0.155      1.528      0.144      -0.089       0.564
+==============================================================================
+Omnibus:                       12.499   Durbin-Watson:                   2.090
+Prob(Omnibus):                  0.002   Jarque-Bera (JB):               12.661
+Skew:                           1.174   Prob(JB):                      0.00178
+Kurtosis:                       5.311   Cond. No.                         33.2
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
