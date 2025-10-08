@@ -1,0 +1,5 @@
+{
+  "variant": "lasso",
+  "threshold": 0.2,
+  "balanced_accuracy_on_train": 0.9318181818181819
+}
