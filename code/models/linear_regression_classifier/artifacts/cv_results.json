@@ -1,0 +1,18 @@
+{
+  "ols": {
+    "cv_balanced_accuracy_mean": 0.825,
+    "cv_balanced_accuracy_std": 0.11303883305208781
+  },
+  "ridge": {
+    "cv_balanced_accuracy_mean": 0.85,
+    "cv_balanced_accuracy_std": 0.13333333333333336
+  },
+  "lasso": {
+    "cv_balanced_accuracy_mean": 0.8833333333333332,
+    "cv_balanced_accuracy_std": 0.16329931618554525
+  },
+  "elasticnet": {
+    "cv_balanced_accuracy_mean": 0.8833333333333332,
+    "cv_balanced_accuracy_std": 0.16329931618554525
+  }
+}

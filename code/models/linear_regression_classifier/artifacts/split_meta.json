@@ -1,0 +1,70 @@
+{
+  "random_state": 42,
+  "test_size": 0.25,
+  "feature_list": [
+    "polsby_popper",
+    "schwartzberg",
+    "convex_hull_ratio",
+    "reock",
+    "pct_white",
+    "pct_black",
+    "pct_asian",
+    "pct_hispanic",
+    "majority_race"
+  ],
+  "numeric": [
+    "polsby_popper",
+    "schwartzberg",
+    "convex_hull_ratio",
+    "reock",
+    "pct_white",
+    "pct_black",
+    "pct_asian",
+    "pct_hispanic"
+  ],
+  "categorical": [
+    "majority_race"
+  ],
+  "train_index": [
+    4,
+    1,
+    12,
+    26,
+    3,
+    5,
+    34,
+    10,
+    17,
+    30,
+    6,
+    20,
+    32,
+    18,
+    29,
+    0,
+    33,
+    14,
+    21,
+    2,
+    36,
+    13,
+    25,
+    35,
+    31,
+    9,
+    27,
+    28
+  ],
+  "test_index": [
+    22,
+    23,
+    7,
+    24,
+    11,
+    19,
+    8,
+    37,
+    15,
+    16
+  ]
+}
