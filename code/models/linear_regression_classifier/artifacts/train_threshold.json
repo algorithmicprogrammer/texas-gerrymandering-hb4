@@ -1,5 +1,7 @@
 {
-  "variant": "ridge",
-  "threshold": 0.35000000000000003,
-  "balanced_accuracy_on_train": 0.9166666666666667
+  "variant": "lasso",
+  "threshold": 0.33,
+  "balanced_accuracy_on_train": 0.9166666666666667,
+  "use_polynomial_features": false,
+  "polynomial_degree": 1
 }

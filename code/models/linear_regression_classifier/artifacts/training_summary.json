@@ -1,23 +1,85 @@
 {
-  "selected_variant": "ridge",
+  "selected_variant": "lasso",
   "train_balanced_accuracy": 0.9166666666666667,
-  "final_threshold": 0.35000000000000003,
+  "final_threshold": 0.33,
   "cv_results": {
     "ols": {
-      "cv_balanced_accuracy_mean": 0.6833333333333333,
-      "cv_balanced_accuracy_std": 0.12247448713915894
+      "cv_balanced_accuracy_mean": 0.8333333333333333,
+      "cv_balanced_accuracy_std": 0.158113883008419,
+      "use_polynomial_features": false,
+      "polynomial_degree": 1
+    },
+    "ols_poly": {
+      "cv_balanced_accuracy_mean": 0.8333333333333333,
+      "cv_balanced_accuracy_std": 0.14907119849998599,
+      "use_polynomial_features": true,
+      "polynomial_degree": 2
     },
     "ridge": {
-      "cv_balanced_accuracy_mean": 0.85,
-      "cv_balanced_accuracy_std": 0.13333333333333336
+      "cv_balanced_accuracy_mean": 0.8333333333333333,
+      "cv_balanced_accuracy_std": 0.158113883008419,
+      "use_polynomial_features": false,
+      "polynomial_degree": 1
     },
     "lasso": {
-      "cv_balanced_accuracy_mean": 0.85,
-      "cv_balanced_accuracy_std": 0.13333333333333336
+      "cv_balanced_accuracy_mean": 0.9166666666666666,
+      "cv_balanced_accuracy_std": 0.16666666666666669,
+      "use_polynomial_features": false,
+      "polynomial_degree": 1
     },
     "elasticnet": {
-      "cv_balanced_accuracy_mean": 0.85,
-      "cv_balanced_accuracy_std": 0.13333333333333336
+      "cv_balanced_accuracy_mean": 0.8666666666666666,
+      "cv_balanced_accuracy_std": 0.1715938356831167,
+      "use_polynomial_features": false,
+      "polynomial_degree": 1
+    },
+    "ridge_poly": {
+      "cv_balanced_accuracy_mean": 0.7333333333333332,
+      "cv_balanced_accuracy_std": 0.09718253158075503,
+      "use_polynomial_features": true,
+      "polynomial_degree": 2
+    },
+    "lasso_poly": {
+      "cv_balanced_accuracy_mean": 0.75,
+      "cv_balanced_accuracy_std": 0.09128709291752773,
+      "use_polynomial_features": true,
+      "polynomial_degree": 2
+    },
+    "elasticnet_poly": {
+      "cv_balanced_accuracy_mean": 0.8,
+      "cv_balanced_accuracy_std": 0.0408248290463863,
+      "use_polynomial_features": true,
+      "polynomial_degree": 2
     }
-  }
+  },
+  "compactness_pca": {
+    "metrics": [
+      "polsby_popper",
+      "schwartzberg",
+      "convex_hull_ratio",
+      "reock"
+    ],
+    "scaler_mean": [
+      0.221836988782935,
+      0.4626842641033208,
+      0.6869649492932969,
+      0.3447026021018883
+    ],
+    "scaler_scale": [
+      0.08658260237780978,
+      0.08809234095029718,
+      0.10691193073924808,
+      0.10252565155680432
+    ],
+    "pca_components": [
+      0.5326604170627146,
+      0.5420231196260704,
+      0.48495683113594357,
+      0.43278249712757744
+    ],
+    "explained_variance_ratio": 0.7908192155948008,
+    "sign_correction": 1.0
+  },
+  "use_polynomial_features": false,
+  "polynomial_degree": 1
 }

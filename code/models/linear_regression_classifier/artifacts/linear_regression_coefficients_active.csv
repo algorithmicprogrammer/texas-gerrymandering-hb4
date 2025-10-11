@@ -1,10 +1,7 @@
 feature,coef
-pct_black,0.25322737514882376
-pct_asian,0.15247465111766528
-pct_hispanic,0.1409148450579777
-reock,0.08567723042466996
-convex_hull_ratio,-0.08514563143488842
-majority_race_pct_white,-0.059588865822017216
-majority_race_pct_hispanic,0.03611846007319825
-polsby_popper,0.013833004915212384
-schwartzberg,-0.003037845123839534
+pct_black,0.27184033167896066
+pct_hispanic,0.173348197501638
+pct_asian,0.1390141924967613
+majority_race_pct_hispanic,0.0
+majority_race_pct_white,-0.0
+compactness_pca_score,-0.0
