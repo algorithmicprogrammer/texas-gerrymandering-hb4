@@ -1,18 +1,50 @@
 {
   "ols": {
-    "cv_balanced_accuracy_mean": 0.6833333333333333,
-    "cv_balanced_accuracy_std": 0.12247448713915894
+    "cv_balanced_accuracy_mean": 0.8333333333333333,
+    "cv_balanced_accuracy_std": 0.158113883008419,
+    "use_polynomial_features": false,
+    "polynomial_degree": 1
+  },
+  "ols_poly": {
+    "cv_balanced_accuracy_mean": 0.8333333333333333,
+    "cv_balanced_accuracy_std": 0.14907119849998599,
+    "use_polynomial_features": true,
+    "polynomial_degree": 2
   },
   "ridge": {
-    "cv_balanced_accuracy_mean": 0.85,
-    "cv_balanced_accuracy_std": 0.13333333333333336
+    "cv_balanced_accuracy_mean": 0.8333333333333333,
+    "cv_balanced_accuracy_std": 0.158113883008419,
+    "use_polynomial_features": false,
+    "polynomial_degree": 1
   },
   "lasso": {
-    "cv_balanced_accuracy_mean": 0.85,
-    "cv_balanced_accuracy_std": 0.13333333333333336
+    "cv_balanced_accuracy_mean": 0.9166666666666666,
+    "cv_balanced_accuracy_std": 0.16666666666666669,
+    "use_polynomial_features": false,
+    "polynomial_degree": 1
   },
   "elasticnet": {
-    "cv_balanced_accuracy_mean": 0.85,
-    "cv_balanced_accuracy_std": 0.13333333333333336
+    "cv_balanced_accuracy_mean": 0.8666666666666666,
+    "cv_balanced_accuracy_std": 0.1715938356831167,
+    "use_polynomial_features": false,
+    "polynomial_degree": 1
+  },
+  "ridge_poly": {
+    "cv_balanced_accuracy_mean": 0.7333333333333332,
+    "cv_balanced_accuracy_std": 0.09718253158075503,
+    "use_polynomial_features": true,
+    "polynomial_degree": 2
+  },
+  "lasso_poly": {
+    "cv_balanced_accuracy_mean": 0.75,
+    "cv_balanced_accuracy_std": 0.09128709291752773,
+    "use_polynomial_features": true,
+    "polynomial_degree": 2
+  },
+  "elasticnet_poly": {
+    "cv_balanced_accuracy_mean": 0.8,
+    "cv_balanced_accuracy_std": 0.0408248290463863,
+    "use_polynomial_features": true,
+    "polynomial_degree": 2
   }
 }

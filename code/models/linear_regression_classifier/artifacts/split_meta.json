@@ -2,20 +2,14 @@
   "random_state": 42,
   "test_size": 0.25,
   "feature_list": [
-    "polsby_popper",
-    "schwartzberg",
-    "convex_hull_ratio",
-    "reock",
+    "compactness_pca_score",
     "pct_black",
     "pct_asian",
     "pct_hispanic",
     "majority_race"
   ],
   "numeric": [
-    "polsby_popper",
-    "schwartzberg",
-    "convex_hull_ratio",
-    "reock",
+    "compactness_pca_score",
     "pct_black",
     "pct_asian",
     "pct_hispanic"
@@ -23,6 +17,34 @@
   "categorical": [
     "majority_race"
   ],
+  "compactness_pca": {
+    "metrics": [
+      "polsby_popper",
+      "schwartzberg",
+      "convex_hull_ratio",
+      "reock"
+    ],
+    "scaler_mean": [
+      0.221836988782935,
+      0.4626842641033208,
+      0.6869649492932969,
+      0.3447026021018883
+    ],
+    "scaler_scale": [
+      0.08658260237780978,
+      0.08809234095029718,
+      0.10691193073924808,
+      0.10252565155680432
+    ],
+    "pca_components": [
+      0.5326604170627146,
+      0.5420231196260704,
+      0.48495683113594357,
+      0.43278249712757744
+    ],
+    "explained_variance_ratio": 0.7908192155948008,
+    "sign_correction": 1.0
+  },
   "train_index": [
     4,
     1,
