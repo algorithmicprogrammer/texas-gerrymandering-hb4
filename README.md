@@ -179,15 +179,27 @@ pytests test
     │   ├── 03_clean_census_shpfile.ipynb    # cleaning census block geospatial data
     │   ├── 04_clean_vtd_election_results.ipynb   # cleaning election results data
     │   └── 05_clean_vtd_shpfile.ipynb   # cleaning precinct geospatial data
+    │   ├── models
+    │   ├── linear_regression_classifier
+            │   ├── 01_preprocess.ipynb    
+            │   ├── 02_train.ipynb  
+            │   └── 03_evaluate.ipynb 
+    │   └── kmeans_clustering 
+            │   ├── 01_preprocess.ipynb   
+            │   ├── 02_train.ipynb  
+            │   └── 03_evaluate.ipynb
 ├── data
-│   ├── interim
-    │   ├── districts_clean.gpkg   # clean congressional district geospatial data
-    │   └── tx_pl94_clean.parquet   # clean Census racial demographics data
 │   ├── processed
 │   └── raw
     │   ├── 2024-general-vtds-election-data  # precinct-level election results data
     │   ├── PLANC2333    # congressional districts geospatial data 
     │   ├── tl_2020_48_tabblock20    # census block geospatial data
+            │   ├── tl_2020_48_tabblock.cpg    #identity character encoding
+            │   ├── tl_2020_48_tabblock.dbf    #tabular attribute information
+            │   ├── tl_2020_48_tabblock.prj    #Coordinate System information
+            │   ├── tl_2020_48_tabblock.shp    # Feature Geometry
+            │   ├── tl_2020_48_tabblock.shp.ea.iso    # International Organization for Standardization metadata in XML
+            │   └── tl_2020_48_tabblock20.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML 
     │   ├── tx_pl2020_official   # census racial demographics data
     │   └── vtds_24pg   # voting district geospatial data
 ├── docs #docs to be published on project website
@@ -198,6 +210,7 @@ pytests test
     │   ├── models.md   # readme for machine learning models
     │   └── references.md   # readme for references used
 ├── pyproject.toml
+├── etl_pipeline.py
 ├── references
 ├── reports
 │   └── figures
