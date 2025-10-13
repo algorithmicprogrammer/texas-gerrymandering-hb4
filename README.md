@@ -193,6 +193,12 @@ pytests test
 │   └── raw
     │   ├── 2024-general-vtds-election-data  # precinct-level election results data
     │   ├── PLANC2333    # congressional districts geospatial data 
+            │   ├── PLANC2333.cpg    #identity character encoding
+            │   ├── PLANC2333.dbf    #tabular attribute information
+            │   ├── PLANC2333.prj    #Coordinate System information
+            │   ├── PLANC2333.shp    # Feature Geometry
+            │   ├── PLANC2333.shp.ea.iso    # International Organization for Standardization metadata in XML
+            │   └── PLANC2333.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML
     │   ├── tl_2020_48_tabblock20    # census block geospatial data
             │   ├── tl_2020_48_tabblock.cpg    #identity character encoding
             │   ├── tl_2020_48_tabblock.dbf    #tabular attribute information
