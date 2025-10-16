@@ -163,7 +163,7 @@ python etl_pipeline.py \
 ### Testing
 Run tests.
 ```
-pytests test
+pytest tests/
 ```
 
 
