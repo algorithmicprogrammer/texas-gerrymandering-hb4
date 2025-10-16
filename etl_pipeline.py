@@ -56,9 +56,12 @@ def coerce_types_light(df: pd.DataFrame) -> pd.DataFrame:
     # normalize text-ish empties
     for c in out.columns:
         if pd.api.types.is_object_dtype(out[c]) or pd.api.types.is_string_dtype(out[c]):
-            out[c] = (
-                out[c].astype(str).str.strip()
-                .replace({"": pd.NA, "na": pd.NA, "null": pd.NA, "none": pd.NA})
+            col = out[c].astype("string")
+            stripped = col.str.strip()
+            # Preserve genuine missing values (pd.NA) instead of coercing them to the
+            # string "<NA>" which happens with astype(str).
+            out[c] = stripped.mask(
+                stripped.isin({"", "na", "null", "none"}), pd.NA
             )
     # attempt datetime on obvious names
     for c in out.columns:
