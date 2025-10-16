@@ -18,6 +18,8 @@ from etl_pipeline import (
     run_etl,
     build_final,
     dataset_key,
+    build_cntyvtd_from_parts,
+    build_cntyvtd_from_fips_vtd,
 )
 
 
@@ -72,6 +74,19 @@ def test_clean_vtd_election_returns_tall_to_wide_conversion() -> None:
     assert second["dem_votes"] == 90 and second["rep_votes"] == 70
     assert first["total_votes"] == 180
     assert pytest.approx(first["two_party_dem_share"], rel=1e-6) == 100 / (100 + 80)
+
+
+def test_cntyvtd_builders_require_both_parts() -> None:
+    cnty = pd.Series(["1", None, "003", None])
+    vtd = pd.Series(["5", "12", None, "7A"])
+
+    built = build_cntyvtd_from_parts(cnty, vtd)
+    expected = pd.Series(["00100005", pd.NA, pd.NA, pd.NA], dtype="string")
+    pd.testing.assert_series_equal(built.astype("string"), expected)
+
+    fips = pd.Series(["48001", "", "48005", None])
+    built_fips = build_cntyvtd_from_fips_vtd(fips, vtd)
+    pd.testing.assert_series_equal(built_fips.astype("string"), expected)
 
 
 def _create_mock_inputs(tmp_path: Path) -> tuple[list[Path], Path, Path, Path]:
