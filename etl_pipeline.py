@@ -547,16 +547,37 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
     # --------------------------------------------------------------------------
 
     def _to_wide(sub: pd.DataFrame) -> pd.DataFrame:
-        agg = sub.groupby(["cntyvtd", "party"], as_index=False)["votes"].sum()
-        piv = agg.pivot_table(index="cntyvtd", columns="party", values="votes", fill_value=0, aggfunc="sum")
-        for p in ["D","R","G","L","I","W"]:
-            if p not in piv.columns: piv[p] = 0
+        # Drop rows missing a usable CNTYVTD key. These records cannot be
+        # reconciled with geography and would otherwise produce a literal
+        # "nan" key in the pivot output.
+        working = sub.loc[sub["cntyvtd"].notna()].copy()
+        if working.empty:
+            return pd.DataFrame(
+                columns=[
+                    "cntyvtd",
+                    "dem_votes",
+                    "rep_votes",
+                    "third_party_votes",
+                    "total_votes",
+                    "two_party_dem_share",
+                ]
+            )
+
+        working["cntyvtd"] = working["cntyvtd"].astype("string")
+
+        agg = working.groupby(["cntyvtd", "party"], as_index=False)["votes"].sum()
+        piv = agg.pivot_table(
+            index="cntyvtd", columns="party", values="votes", fill_value=0, aggfunc="sum"
+        ).reset_index()
+        for p in ["D", "R", "G", "L", "I", "W"]:
+            if p not in piv.columns:
+                piv[p] = 0
         out = pd.DataFrame({
-            "cntyvtd": piv.index.astype(str),
+            "cntyvtd": piv["cntyvtd"].astype("string"),
             "dem_votes": piv["D"].astype(int),
             "rep_votes": piv["R"].astype(int),
         })
-        out["third_party_votes"] = piv[["G","L","I","W"]].sum(axis=1).astype(int)
+        out["third_party_votes"] = piv[["G", "L", "I", "W"]].sum(axis=1).astype(int)
         out["total_votes"] = (out["dem_votes"] + out["rep_votes"] + out["third_party_votes"]).astype(int)
         out["two_party_dem_share"] = (
             out["dem_votes"] / (out["dem_votes"] + out["rep_votes"]).replace({0: pd.NA})
