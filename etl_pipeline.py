@@ -219,7 +219,17 @@ def normalize_cntyvtd_safely(key_series: pd.Series) -> pd.Series:
     bad = m.isna().any(axis=1)
     m.loc[~bad, "cnty"] = m.loc[~bad, "cnty"].astype(str).str.zfill(3)
     m.loc[~bad, "vtd"]  = m.loc[~bad, "vtd"].astype(str).str.zfill(5)   # ← pad to 5
-    out = (m["cnty"] + m["vtd"] + m["suf"].fillna("")).where(~bad)
+
+    out = pd.Series(pd.NA, index=key_series.index, dtype="string")
+    good = ~bad
+    if good.any():
+        suf = m.loc[good, "suf"].fillna("").astype("string")
+        combined = (
+            m.loc[good, "cnty"].astype(str)
+            + m.loc[good, "vtd"].astype(str)
+            + suf.astype(str)
+        )
+        out.loc[good] = combined.astype("string")
     return out
 
 
