@@ -156,40 +156,50 @@ def normalize_vtd_key(df: pd.DataFrame, prefer="cntyvtd") -> pd.DataFrame:
 
 
 def _std_vtd_code(vtd_raw: pd.Series) -> pd.Series:
-    s = vtd_raw.astype(str).str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+    s = vtd_raw.astype("string").str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
     letters = s.str.extract(r"([A-Z]+)$", expand=False).fillna("")
-    digits  = s.str.replace(r"[A-Z]+$", "", regex=True)
-    digits = digits.where(digits.str.len() > 0, pd.NA)
-    digits = digits.mask(digits.isna(), None)
-    # pad to 5 (Texas often uses 5-digit VTDs in larger counties)
-    digits = digits.apply(lambda x: None if x is None else x.zfill(5))
-    out = pd.Series(digits, index=s.index).fillna("") + letters
-    return out.replace({"": pd.NA})
+    digits = s.str.replace(r"[A-Z]+$", "", regex=True)
+    digits = digits.where(digits.str.len() > 0, pd.NA).astype("string")
+    letters = letters.astype("string")
+
+    out = pd.Series(pd.NA, dtype="string", index=s.index)
+    valid = digits.notna()
+    if valid.any():
+        padded = digits.loc[valid].str.zfill(5)
+        out.loc[valid] = (padded + letters.loc[valid]).astype("string")
+    return out
 
 
 def _std_cnty_code_from_cnty(cnty_raw: pd.Series) -> pd.Series:
-    s = cnty_raw.astype(str).str.replace(r"[^0-9]", "", regex=True)
-    s = s.str.lstrip("0").where(lambda x: x.str.len() > 0, "0")
-    return s.str.zfill(3)
+    s = cnty_raw.astype("string").str.replace(r"[^0-9]", "", regex=True)
+    s = s.where(s.str.len() > 0, pd.NA)
+    s = s.str[-3:].str.zfill(3)
+    return s.where(~s.isin({"000"}), pd.NA)
 
 
 def _std_cnty_code_from_fips(fips_raw: pd.Series) -> pd.Series:
-    s = fips_raw.astype(str).str.replace(r"[^0-9]", "", regex=True)
-    return s.apply(lambda x: x[-3:] if len(x) >= 3 else x.zfill(3))
+    s = fips_raw.astype("string").str.replace(r"[^0-9]", "", regex=True)
+    s = s.where(s.str.len() > 0, pd.NA)
+    s = s.str[-3:].str.zfill(3)
+    return s.where(~s.isin({"000"}), pd.NA)
 
 
 def build_cntyvtd_from_parts(cnty_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
-    cnty3 = _std_cnty_code_from_cnty(cnty_series)
-    vtd5  = _std_vtd_code(vtd_series)  # now 5-digit padded
-    out = cnty3 + vtd5.fillna("")
-    return out.replace({"": pd.NA})
+    cnty3 = _std_cnty_code_from_cnty(cnty_series).astype("string")
+    vtd5 = _std_vtd_code(vtd_series).astype("string")
+    valid = cnty3.notna() & vtd5.notna()
+    out = pd.Series(pd.NA, dtype="string", index=cnty3.index)
+    out.loc[valid] = (cnty3.loc[valid] + vtd5.loc[valid]).astype("string")
+    return out
 
 
 def build_cntyvtd_from_fips_vtd(fips_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
-    cnty3 = _std_cnty_code_from_fips(fips_series)
-    vtd5  = _std_vtd_code(vtd_series)  # now 5-digit padded
-    out = cnty3 + vtd5.fillna("")
-    return out.replace({"": pd.NA})
+    cnty3 = _std_cnty_code_from_fips(fips_series).astype("string")
+    vtd5 = _std_vtd_code(vtd_series).astype("string")
+    valid = cnty3.notna() & vtd5.notna()
+    out = pd.Series(pd.NA, dtype="string", index=cnty3.index)
+    out.loc[valid] = (cnty3.loc[valid] + vtd5.loc[valid]).astype("string")
+    return out
 
 
 def normalize_cntyvtd_safely(key_series: pd.Series) -> pd.Series:
@@ -387,7 +397,11 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
             t.loc[sel, cf].astype(str).str.findall(r"\d").str.join("").str[-3:].str.zfill(3)
         )
 
-    t["cnty"] = t["cnty"].astype(str).str.findall(r"\d").str.join("").str[-3:].str.zfill(3)
+    t["cnty"] = (
+        t["cnty"].astype("string")
+        .str.findall(r"\d").str.join("").str[-3:].str.zfill(3)
+        .where(lambda s: ~s.isin({"", "000", "<NA>", "nan"}), pd.NA)
+    )
 
     # 2) Build robust VTD digits (+ optional letter suffix) from flexible columns.
     def _first_present(df, cols):
@@ -402,10 +416,17 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
 
     if vtd_col is None and "cntyvtd" in t.columns:
         # derive digits from any existing combined key
-        t["_e_vtd_digits"] = t["cntyvtd"].astype(str).str.findall(r"\d").str.join("").str[-5:].str.zfill(5)
+        digits_src = t["cntyvtd"].astype(str)
+    elif vtd_col:
+        digits_src = t[vtd_col].astype(str)
     else:
-        raw = (t[vtd_col].astype(str) if vtd_col else pd.Series("", index=t.index))
-        t["_e_vtd_digits"] = raw.str.findall(r"\d").str.join("").str[-5:].str.zfill(5)
+        digits_src = pd.Series("", index=t.index, dtype="string")
+
+    t["_e_vtd_digits"] = (
+        digits_src.str.findall(r"\d").str.join("").str[-5:].str.zfill(5)
+        .where(lambda s: ~s.isin({"", "00000", "<NA>", "nan"}), pd.NA)
+        .astype("string")
+    )
 
     # Try to capture split/letter suffix if present
     split_col = _first_present(t, ["Split", "split", "Suffix", "suffix", "Precinct Split", "PrecinctSplit"])
@@ -417,13 +438,19 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
 
     # Make string-safe
     t["_e_vtd_digits"] = t["_e_vtd_digits"].astype("string")
-    suf = suf.astype("string")
+    suf = suf.astype("string").fillna("")
     t["cnty"] = t["cnty"].astype("string")
 
+    valid_parts = t["cnty"].notna() & t["_e_vtd_digits"].notna()
+    combined = (t.loc[valid_parts, "cnty"] + t.loc[valid_parts, "_e_vtd_digits"])
+
     # Compose: <3-digit cnty><5-digit vtd><suffix?>
-    t["cntyvtd"] = (t["cnty"] + t["_e_vtd_digits"] + suf).astype("string")
+    t["cntyvtd"] = pd.Series(pd.NA, dtype="string", index=t.index)
+    t.loc[valid_parts, "cntyvtd"] = (combined + suf.loc[valid_parts]).astype("string")
+
     # standardized (no suffix)
-    t["cntyvtd_std"] = (t["cnty"] + t["_e_vtd_digits"]).astype("string")
+    t["cntyvtd_std"] = pd.Series(pd.NA, dtype="string", index=t.index)
+    t.loc[valid_parts, "cntyvtd_std"] = combined.astype("string")
 
     # Helpful debug
     bexar = t.loc[t["cnty"] == "029"]
