@@ -228,17 +228,9 @@ pytest tests/
 ├── reports
 │   └── figures
 ├── requirements.txt
-├── setup.cfg
 └── texas_gerrymandering_hb4
     ├── __init__.py
-    ├── config.py
-    ├── dataset.py
-    ├── features.py
-    ├── modeling
-    │   ├── __init__.py
-    │   ├── predict.py
-    │   └── train.py
-    └── plots.py
+    └── config.py
 ```
 
 ---
