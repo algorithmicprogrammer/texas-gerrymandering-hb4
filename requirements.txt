@@ -18,5 +18,6 @@ joblib
 scikit-learn
 matplotlib
 seaborn
+scipy
 -e .
 
