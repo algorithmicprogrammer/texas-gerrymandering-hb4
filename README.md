@@ -51,7 +51,7 @@ After an extensive data consolidation process via a custom pipeline, supervised 
 <li>password: marisoliit</li>
 
 ## Paper Rough Draft
-Link: https://app.crixet.com/?u=8728e76a-da9d-45cd-95ee-d5661da170d4&pg=1&m=Springer%2Fsn-article.tex&d=7
+Link: https://app.crixet.com/?u=cf7ad3da-e4fa-4fcb-b6f2-75621a5d0377&pg=1&m=template.tex&d=7
 
 ### Data Sources
 <ul>
