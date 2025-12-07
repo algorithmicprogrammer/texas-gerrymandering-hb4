@@ -43,8 +43,21 @@
 </details>
 
 ## About the Project
-This experiment introduces a novel computational approach to detect illegal negative racial gerrymandering practices and applies it to Texas amid the mid-decade redistricting following the 2025 passage of HB4. Leveraging a reproducible workflow, we combine Texas Legislative Council shapefiles, U.S. Census Redistricting Data, U.S. Census TIGER/LINE shapefiles, and precinct-level election results to build a consolidated dataset providng detailed information on each Texas congressional district.
-After an extensive data consolidation process via a custom pipeline, supervised and unsupervised machine learning methods are employed to examine the effect of racial features on Texas congressional districts. A linear regression classifier predicts district partisan outcome based on racial features, whereas a K-means clustering algorithm assesses how racial composition affects the clustering of the districts. Our results demonstrate that race plays a predominant role in shaping district party outcomes and clusters. This in turn provides evidence of illegal negative racial gerrymandering practices in Texas following the mid-decade redistrcting passed in HB4. We contribute a framework for evaluating negative racial gerrymandering with machine learning methods, which can be applied nationwide. 
+This experiment introduces a novel computational framework to detect illegal negative racial ger-
+rymandering practices in America; this framework is applied to Texas’s mid-decade redistricting
+following the 2025 passage of HB4. Leveraging a reproducible workflow, we combine Texas Leg-
+islative Council shapefiles, U.S. Census Redistricting Data, U.S. Census TIGER/LINE shapefiles,
+and precinct-level election returns to build a consolidated dataset providng the racial demographic,
+partisan, and geometric compactness measures of each Congressional district.
+
+After an extensive data consolidation process via a custom data pipeline, we implement unsupervised
+machine learning and Bayesian inference techniques. K-means clustering is used to assess how racial
+composition features affect the clustering of the districts. A two-component Gaussian finite mixture
+model reveals two clusters of districts: one that is compact and stable in regards to racial composition
+features, and one that is less compact and more prone to gerrymandering.
+
+Our work contributes the first end-to-end open and reproducible framework for evaluating illegal
+negative racial gerrymandering practices, with direct implications towards redistricting worldwide
 
 ## Website
 <li>url: https://texasracialgerrymanderingstudy.vercel.app</li>
