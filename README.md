@@ -5,10 +5,10 @@
     <img src="images/texas_flag.jpg" alt="texas" width="80" height="80">
   </a>
 
-  <h3 align="center">A Quantitative Analysis of Negative Racial Gerrymandering in Texas</h3>
+  <h3 align="center">A Novel Computational Framework for Detecting Illegal Negative Gerrymandering Practices in America</h3>
 
   <p align="center">
-    An Illinois Institute of Technology study quantifying negative racial gerrymandering in Texas as a result of SB4.
+    Leveraging machine learning and Bayesian statistical techniques to detect illegal negative racial gerrymandering practices i Texas after the 2025 HB4 mid-decade redistricting.
     <br />
     <a href=""><strong>Explore Docs »</strong></a>
     <br />
