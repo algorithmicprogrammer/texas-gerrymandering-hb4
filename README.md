@@ -187,11 +187,13 @@ pytest tests/
     │   ├── 04_clean_vtd_election_results.ipynb   # cleaning election results data
     │   └── 05_clean_vtd_shpfile.ipynb   # cleaning precinct geospatial data
     │   ├── models
-    │   ├── linear_regression_classifier
+        │   ├── finite_mixture_model
+            │   └── finite_mixture_model.ipynb 
+        │   ├── linear_regression_classifier
             │   ├── 01_preprocess.ipynb    
             │   ├── 02_train.ipynb  
             │   └── 03_evaluate.ipynb 
-    │   └── kmeans_clustering 
+        │   └── kmeans_clustering 
             │   ├── 01_preprocess.ipynb   
             │   ├── 02_train.ipynb  
             │   └── 03_evaluate.ipynb
