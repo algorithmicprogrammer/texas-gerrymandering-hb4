@@ -59,11 +59,11 @@ features, and one that is less compact and more prone to gerrymandering.
 Our work contributes the first end-to-end open and reproducible framework for evaluating illegal
 negative racial gerrymandering practices, with direct implications towards redistricting worldwide
 
-## Website
+### Project Website
 <li>url: https://texasracialgerrymanderingstudy.vercel.app</li>
 <li>password: marisoliit</li>
 
-## Paper Rough Draft
+### Paper Rough Draft
 Link: https://app.crixet.com/?u=cf7ad3da-e4fa-4fcb-b6f2-75621a5d0377&pg=1&m=template.tex&d=7
 
 ### Data Sources
