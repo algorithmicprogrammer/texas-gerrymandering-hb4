@@ -26,6 +26,8 @@
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
+        <li><a href="#project-website">Project Website</a></li>
+        <li><a href="#paper-rough-draft">Paper Rough Draft</a></li>
         <li><a href="#data-sources">Data Sources</a></li>
         <li><a href="#technologies-used">Technologies Used</a></li>
       </ul>
