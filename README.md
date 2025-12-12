@@ -196,18 +196,18 @@ pytest tests/
 ├── README.md
 ├── code
 │   ├── datasets
-    │   ├── 01_clean_district_shpfile.ipynb  # cleaning congressional district geospatial data
-    │   ├── 02_clean_census_data.ipynb    # cleaning Census racial demographics data 
-    │   ├── 03_clean_census_shpfile.ipynb    # cleaning census block geospatial data
-    │   ├── 04_clean_vtd_election_results.ipynb   # cleaning election results data
-    │   └── 05_clean_vtd_shpfile.ipynb   # cleaning precinct geospatial data
+    │   ├── 01_eda_district_shpfile.ipynb  # cleaning congressional district geospatial data
+    │   ├── 02_eda_census_data.ipynb    # cleaning Census racial demographics data 
+    │   ├── 03_eda_census_shpfile.ipynb    # cleaning census block geospatial data
+    │   ├── 04_eda_vtd_election_results.ipynb   # cleaning election results data
+    │   └── 05_eda_vtd_shpfile.ipynb   # cleaning precinct geospatial data
     │   ├── models
         │   ├── finite_mixture_model
-            │   └── finite_mixture_model.ipynb 
-        │   ├── linear_regression_classifier
-            │   ├── 01_preprocess.ipynb    
-            │   ├── 02_train.ipynb  
-            │   └── 03_evaluate.ipynb 
+│   │            │   └── finite_mixture_model.ipynb 
+│   │   │   ├── linear_regression_classifier
+│   │       │   ├── 01_preprocess.ipynb    
+│   │       │   ├── 02_train.ipynb  
+│   │       │   └── 03_evaluate.ipynb 
         │   └── kmeans_clustering 
             │   ├── 01_preprocess.ipynb   
             │   ├── 02_train.ipynb  
@@ -215,14 +215,14 @@ pytest tests/
 ├── data
 │   ├── processed
 │   └── raw
-    │   ├── 2024-general-vtds-election-data  # precinct-level election results data
-    │   ├── PLANC2333    # congressional districts geospatial data 
-            │   ├── PLANC2333.cpg    #identity character encoding
-            │   ├── PLANC2333.dbf    #tabular attribute information
-            │   ├── PLANC2333.prj    #Coordinate System information
-            │   ├── PLANC2333.shp    # Feature Geometry
-            │   ├── PLANC2333.shp.ea.iso    # International Organization for Standardization metadata in XML
-            │   └── PLANC2333.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML
+│   │   ├── 2024-general-vtds-election-data  # precinct-level election results data
+│   │   ├── PLANC2333    # congressional districts geospatial data 
+│   │   │   ├── PLANC2333.cpg    #identity character encoding
+│   │   │   ├── PLANC2333.dbf    #tabular attribute information
+│   │   │   ├── PLANC2333.prj    #Coordinate System information
+│   │   │   ├── PLANC2333.shp    # Feature Geometry
+│   │   │   ├── PLANC2333.shp.ea.iso    # International Organization for Standardization metadata in XML
+│   │   │   └── PLANC2333.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML
     │   ├── tl_2020_48_tabblock20    # census block geospatial data
             │   ├── tl_2020_48_tabblock.cpg    #identity character encoding
             │   ├── tl_2020_48_tabblock.dbf    #tabular attribute information
