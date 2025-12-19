@@ -176,7 +176,8 @@ venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
-6. Run ETL pipeline. The datasets are massive and the areal-weighted spatial joins are computationally expensive, so this could take 30+ minutes.
+6. Run ETL pipeline in MacOS/Linux. 
+The datasets are massive and the areal-weighted spatial joins are computationally expensive, so this could take 30+ minutes.
 ```
 python etl_pipeline.py \
   --districts data/raw/PLANC2333/PLANC2333.shp \
@@ -188,6 +189,20 @@ python etl_pipeline.py \
   --data-processed-tabular data/processed/tabular \
   --data-processed-geospatial data/processed/geospatial \
   --sqlite data/warehouse/warehouse.db
+```
+Run ETL pipeline in Windows 11.
+```commandline
+python pipelines/data/etl_pipeline.py ^
+  --districts data/raw/PLANC2333/PLANC2333.shp ^
+  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
+  --vtds data/raw/vtds_24pg/VTDs_24PG.shp ^
+  --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt ^
+  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv ^
+  --elections-office "U.S. Sen" ^
+  --data-processed-tabular data/processed/tabular ^
+  --data-processed-geospatial data/processed/geospatial ^
+  --sqlite data/warehouse/warehouse.db
+
 ```
 
 ### Testing
