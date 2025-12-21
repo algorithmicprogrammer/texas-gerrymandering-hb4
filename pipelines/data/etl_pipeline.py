@@ -1,27 +1,5 @@
 #!/usr/bin/env python3
 # pipelines/data/etl_pipeline.py
-#
-# One-row-per-VTD ETL pipeline:
-# - Cleans/standardizes inputs
-# - Elections (tall -> wide) to get dem/rep votes + shares
-# - Area-weight blocks demographics onto VTDs
-# - Assigns each VTD a district_id (dominant area overlap)
-# - Computes compactness: polsby_popper, convex_hull_ratio, schwartzberg, reock
-# - Final output columns:
-#   cntyvtd, district_id, dem_share, rep_share, pct_white, pct_black, pct_asian, pct_hispanic,
-#   polsby_popper, convex_hull_ratio, schwartzberg, reock
-#
-# Usage (Windows CMD line continuations with ^):
-# python pipelines/data/etl_pipeline.py ^
-#   --districts data/raw/PLANC2333/PLANC2333.shp ^
-#   --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
-#   --vtds data/raw/vtds_24pg/VTDs_24PG.shp ^
-#   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt ^
-#   --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv ^
-#   --elections-office "U.S. Sen" ^
-#   --data-processed-tabular data/processed/tabular ^
-#   --data-processed-geospatial data/processed/geospatial ^
-#   --sqlite data/warehouse/warehouse.db
 
 from __future__ import annotations
 
@@ -90,13 +68,11 @@ def read_any(path: Path) -> pd.DataFrame:
     if ext == ".tsv":
         return pd.read_csv(path, sep="\t")
     if ext == ".parquet":
-        # try geo first; fallback to pandas
         try:
             return gpd.read_parquet(path)
         except Exception:
             return pd.read_parquet(path)
     if ext == ".txt":
-        # crude delimiter detection
         with path.open("r", encoding="utf-8", errors="ignore") as f:
             sample = "".join(f.readlines()[:10])
         sep = "\t" if sample.count("\t") > sample.count(",") else ","
@@ -142,6 +118,49 @@ def ensure_geoid20_str(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def infer_vtd_width_from_series(s: pd.Series, default: int = 6) -> int:
+    x = s.astype("string").str.upper().str.replace(r"[^0-9]", "", regex=True)
+    lens = x.str.len().dropna()
+    if lens.empty:
+        return default
+    if (lens >= 6).any():
+        return 6
+    if (lens >= 5).any():
+        return 5
+    return default
+
+
+def normalize_cntyvtd_flexible(raw: pd.Series, vtd_width: int) -> pd.Series:
+    s = raw.astype("string").str.strip().str.upper()
+    s = s.str.replace(r"[^A-Z0-9]", "", regex=True)
+    s2 = s.str.replace(r"^48", "", regex=True)
+
+    m = s2.str.extract(r"^(?P<cnty>\d{3})(?P<rest>[A-Z0-9]+)$")
+    cnty = m["cnty"].astype("string")
+    rest = m["rest"].astype("string")
+
+    vtd_digits = rest.str.replace(r"[^0-9]", "", regex=True)
+    suf = rest.str.replace(r"[^A-Z]", "", regex=True)
+
+    vtd_digits = vtd_digits.where(vtd_digits.str.len() > 0, pd.NA).str.zfill(vtd_width)
+    out = pd.Series(pd.NA, dtype="string", index=s.index)
+
+    valid = cnty.notna() & cnty.str.fullmatch(r"\d{3}", na=False) & vtd_digits.notna()
+    out.loc[valid] = (cnty.loc[valid] + vtd_digits.loc[valid] + suf.loc[valid].fillna("")).astype("string")
+    return out
+
+
+def digits_only_cntyvtd(std_key: pd.Series, vtd_width: int) -> pd.Series:
+    s = std_key.astype("string").str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+    cnty = s.str.slice(0, 3)
+    rest = s.str.slice(3)
+    vtd_digits = rest.str.replace(r"[^0-9]", "", regex=True).str.zfill(vtd_width)
+    out = pd.Series(pd.NA, dtype="string", index=s.index)
+    valid = cnty.str.fullmatch(r"\d{3}", na=False) & vtd_digits.str.fullmatch(r"\d{" + str(vtd_width) + r"}", na=False)
+    out.loc[valid] = (cnty.loc[valid] + vtd_digits.loc[valid]).astype("string")
+    return out
+
+
 # ============================== ELECTIONS HELPERS ==============================
 def is_tall_elections(df: pd.DataFrame) -> bool:
     cols = set(df.columns)
@@ -151,81 +170,25 @@ def is_tall_elections(df: pd.DataFrame) -> bool:
     return has_key and has_office and has_votes
 
 
-def _normalize_party(party: str | float | int | None) -> str:
+def _normalize_party(party) -> str:
     if pd.isna(party):
         return "UNK"
     s = str(party).strip().upper()
-    s = re.sub(r"[^A-Z]", "", s)  # strip punctuation/spaces
-    if s in ("DEM", "D", "DFL") or "DEMOCRAT" in s:
+    letters = re.sub(r"[^A-Z]", "", s)
+    if letters in ("DEM", "D", "DFL") or "DEMOCRAT" in letters:
         return "DEM"
-    if s in ("REP", "R", "GOP") or "REPUBLICAN" in s:
+    if letters in ("REP", "R", "GOP") or "REPUBLICAN" in letters:
         return "REP"
-    if s.startswith("LIB") or "LIBERTARIAN" in s:
+    if letters.startswith("LIB") or "LIBERTARIAN" in letters:
         return "LIB"
-    if s.startswith("GRN") or "GREEN" in s:
+    if letters.startswith("GRN") or "GREEN" in letters:
         return "GRN"
-    return s if s else "UNK"
-
-
-def normalize_cntyvtd_safely(s: pd.Series) -> pd.Series:
-    s = s.astype("string")
-    cleaned = s.str.strip().str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-    no48 = cleaned.str.replace(r"^48", "", regex=True)
-
-    m = no48.str.extract(r"^(?P<cnty>\d{3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
-    bad = m["cnty"].isna()
-    if bad.any():
-        m2 = s[bad].str.extract(r"^(?P<cnty>\d{1,3})(?P<vtd>\d{1,5})(?P<suf>[A-Z]*)$")
-        m.loc[bad, ["cnty", "vtd", "suf"]] = m2[["cnty", "vtd", "suf"]]
-
-    cnty = m["cnty"].astype("string").str.zfill(3)
-    vtd = m["vtd"].astype("string")
-    vtd = vtd.where(vtd.str.len() > 0, pd.NA).str.zfill(5)
-    suf = m["suf"].astype("string")
-
-    out = pd.Series(pd.NA, dtype="string", index=s.index)
-    valid = cnty.notna() & vtd.notna()
-    out.loc[valid] = (cnty.loc[valid] + vtd.loc[valid] + suf.loc[valid]).astype("string")
-    return out
-
-
-def _std_vtd_code(vtd_raw: pd.Series) -> pd.Series:
-    s = vtd_raw.astype("string").str.strip().str.upper()
-    digits = s.str.replace(r"[^0-9]", "", regex=True)
-    letters = s.str.replace(r"[^A-Z]", "", regex=True)
-    digits = digits.where(digits.str.len() > 0, pd.NA).astype("string")
-    letters = letters.astype("string")
-    out = pd.Series(pd.NA, dtype="string", index=s.index)
-    valid = digits.notna()
-    out.loc[valid] = (digits.loc[valid].str.zfill(5) + letters.loc[valid]).astype("string")
-    return out
-
-
-def build_cntyvtd_from_parts(cnty_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
-    cnty3 = cnty_series.astype("string").str.replace(r"[^\d]", "", regex=True)
-    cnty3 = cnty3.where(cnty3.str.len() > 0, pd.NA).str[-3:].str.zfill(3)
-    vtd5 = _std_vtd_code(vtd_series).astype("string")
-    out = pd.Series(pd.NA, dtype="string", index=cnty3.index)
-    valid = cnty3.notna() & vtd5.notna()
-    out.loc[valid] = (cnty3.loc[valid] + vtd5.loc[valid]).astype("string")
-    return out
-
-
-def build_cntyvtd_from_fips_vtd(fips_series: pd.Series, vtd_series: pd.Series) -> pd.Series:
-    fips = fips_series.astype("string").str.replace(r"[^\d]", "", regex=True)
-    cnty = fips.str[-3:].str.zfill(3)
-    vtd = _std_vtd_code(vtd_series)
-    out = pd.Series(pd.NA, dtype="string", index=fips_series.index)
-    valid = cnty.notna() & vtd.notna()
-    out.loc[valid] = (cnty.loc[valid] + vtd.loc[valid]).astype("string")
-    return out
+    if letters.startswith("IND") or "INDEPENDENT" in letters:
+        return "IND"
+    return letters if letters else "UNK"
 
 
 def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.DataFrame:
-    """
-    Tall elections -> wide by VTD.
-    Returns: cntyvtd, dem_votes, rep_votes, third_party_votes, total_votes, dem_share, rep_share, two_party_dem_share
-    """
     df = stdcols(df)
 
     office_col = "office" if "office" in df.columns else ("race" if "race" in df.columns else None)
@@ -237,13 +200,12 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
     if party_col is None:
         raise ValueError("Elections file has no 'party' column; cannot compute dem/rep votes.")
 
-    # Build cntyvtd
     if "cntyvtd" in df.columns:
-        df["cntyvtd"] = normalize_cntyvtd_safely(df["cntyvtd"])
+        df["cntyvtd"] = df["cntyvtd"].astype("string")
     elif {"county", "precinct"} <= set(df.columns):
-        df["cntyvtd"] = build_cntyvtd_from_parts(df["county"], df["precinct"])
+        df["cntyvtd"] = (df["county"].astype("string") + df["precinct"].astype("string")).astype("string")
     elif {"fips", "vtd"} <= set(df.columns):
-        df["cntyvtd"] = build_cntyvtd_from_fips_vtd(df["fips"], df["vtd"])
+        df["cntyvtd"] = (df["fips"].astype("string") + df["vtd"].astype("string")).astype("string")
     else:
         raise ValueError("Elections file lacks cntyvtd or sufficient fields to construct it.")
 
@@ -256,42 +218,37 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
         if df.empty:
             raise ValueError(f"No rows matched elections office filter: {target_office}")
 
-    # Party normalization
     df["party_norm"] = df[party_col].map(_normalize_party)
 
-    # Votes numeric (IMPORTANT: strip commas like "12,345")
-    df[votes_col] = (
-        df[votes_col]
-        .astype("string")
-        .str.replace(r"[^\d\-\.]", "", regex=True)  # keep digits, minus, dot
-    )
+    df[votes_col] = df[votes_col].astype("string").str.replace(r"[^\d\-\.]", "", regex=True)
     df[votes_col] = pd.to_numeric(df[votes_col], errors="coerce").fillna(0)
 
-    # Aggregate votes by (cntyvtd, party_norm)
+    if float(df[votes_col].sum()) == 0.0:
+        party_sample = df[party_col].astype("string").dropna().head(15).tolist()
+        raise ValueError(
+            f"Votes column '{votes_col}' parsed to all zeros after cleaning. "
+            f"Party sample: {party_sample}. "
+            "This usually means you're not using the correct votes column or values contain non-numeric encodings."
+        )
+
     agg = df.groupby(["cntyvtd", "party_norm"], as_index=False)[votes_col].sum()
     agg = agg.rename(columns={votes_col: "votes"})
 
-    # Pivot to wide
     wide = agg.pivot(index="cntyvtd", columns="party_norm", values="votes").reset_index()
     wide = wide.rename_axis(None, axis=1)
 
-    # Always present numeric columns
     wide["dem_votes"] = pd.to_numeric(wide.get("DEM", 0), errors="coerce").fillna(0).astype("int64")
     wide["rep_votes"] = pd.to_numeric(wide.get("REP", 0), errors="coerce").fillna(0).astype("int64")
 
-    # Third party = sum of all party columns except DEM/REP
     party_cols = [c for c in wide.columns if c not in ("cntyvtd", "dem_votes", "rep_votes")]
     party_cols = [c for c in party_cols if c not in ("DEM", "REP")]
     if party_cols:
-        wide["third_party_votes"] = (
-            wide[party_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1).astype("int64")
-        )
+        wide["third_party_votes"] = wide[party_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1).astype("int64")
     else:
         wide["third_party_votes"] = 0
 
     wide["total_votes"] = (wide["dem_votes"] + wide["rep_votes"] + wide["third_party_votes"]).astype("int64")
 
-    # Shares (safe)
     tot = wide["total_votes"]
     wide["dem_share"] = (wide["dem_votes"] / tot).where(tot > 0, 0.0)
     wide["rep_share"] = (wide["rep_votes"] / tot).where(tot > 0, 0.0)
@@ -304,40 +261,32 @@ def clean_vtd_election_returns(df: pd.DataFrame, target_office: str = "") -> pd.
 
 # ============================== BLOCKS/PL HELPERS ==============================
 def unify_pl94_schema(pl94: pd.DataFrame) -> pd.DataFrame:
-    """
-    Minimal schema unifier:
-    - Ensures geoid20 exists as 15-digit string.
-    Your Blocks_Pop.txt already includes lots of columns; we mainly unify the GEOID column name.
-    """
     df = stdcols(pl94)
+    if "geoid20" in df.columns:
+        df["geoid20"] = (
+            df["geoid20"].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.zfill(15)
+        )
+        return df
 
     geoid_candidates = [
-        "geoid20", "geoid", "tabblock20", "tabblock2020",
-        "block_geoid", "blk_geoid", "ctbkey", "sctbkey",
+        "geoid", "tabblock20", "tabblock2020",
+        "block_geoid", "blk_geoid", "sctbkey", "ctbkey",
     ]
     geoid_col = next((c for c in geoid_candidates if c in df.columns), None)
-    if geoid_col is None:
-        raise ValueError("Blocks_Pop file lacks a GEOID column (need geoid20/geoid/tabblock20/etc).")
-    if geoid_col != "geoid20":
-        df = df.rename(columns={geoid_col: "geoid20"})
-
-    df["geoid20"] = (
-        df["geoid20"].astype(str)
-        .str.replace(r"\.0$", "", regex=True)
-        .str.replace(r"[^\d]", "", regex=True)
-        .str.zfill(15)
-    )
+    if geoid_col is not None:
+        df["geoid20"] = (
+            df[geoid_col].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.zfill(15)
+        )
     return df
 
 
 def pick_pop_columns(pl: pd.DataFrame) -> tuple[str, dict[str, str]]:
-    """
-    Choose denominator + race-count columns from your Blocks_Pop schema.
-
-    Preference order:
-      1) VAP-based shares: vap, anglovap, blackvap, asianvap, hispvap
-      2) Total-pop shares: total, anglo, black, asian, hisp
-    """
     cols = set(pl.columns)
 
     if {"vap", "anglovap", "blackvap", "asianvap", "hispvap"} <= cols:
@@ -356,7 +305,6 @@ def pick_pop_columns(pl: pd.DataFrame) -> tuple[str, dict[str, str]]:
             "pct_hispanic": "hisp",
         }
 
-    # last-resort: pop20 as denominator (if present)
     if "pop20" in cols and {"anglo", "black", "asian", "hisp"} <= cols:
         return "pop20", {
             "pct_white": "anglo",
@@ -374,15 +322,11 @@ def pick_pop_columns(pl: pd.DataFrame) -> tuple[str, dict[str, str]]:
 
 
 def pick_district_id_col(districts: pd.DataFrame) -> str | None:
-    """
-    Try to find the district identifier column in the districts file.
-    If none match, we'll fall back to district_idx+1.
-    """
     candidates = [
         "district_id", "district", "cd", "congress", "congdist", "cong_dist",
         "district_n", "dist",
         "cd116fp", "cd117fp", "cd118fp", "cd119fp",
-        "cdfp", "cdxxfp",  # generic
+        "cdfp",
     ]
     cols = set(districts.columns)
     for c in candidates:
@@ -391,12 +335,8 @@ def pick_district_id_col(districts: pd.DataFrame) -> str | None:
     return None
 
 
-# ============================== REOCK (ROBUST) ==============================
+# ============================== REOCK + COMPACTNESS ==============================
 def _mec_circle_from_points(points: np.ndarray) -> tuple[np.ndarray, float]:
-    """
-    Minimal enclosing circle (randomized incremental).
-    Returns (center_xy, radius). points: (n,2)
-    """
     pts = points.astype(float)
     pts = pts[np.isfinite(pts).all(axis=1)]
     if len(pts) == 0:
@@ -422,8 +362,16 @@ def _mec_circle_from_points(points: np.ndarray) -> tuple[np.ndarray, float]:
         d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
         if abs(d) < 1e-12:
             return np.array([np.nan, np.nan]), np.nan
-        ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
-        uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
+        ux = (
+            (ax * ax + ay * ay) * (by - cy)
+            + (bx * bx + by * by) * (cy - ay)
+            + (cx * cx + cy * cy) * (ay - by)
+        ) / d
+        uy = (
+            (ax * ax + ay * ay) * (cx - bx)
+            + (bx * bx + by * by) * (ax - cx)
+            + (cx * cx + cy * cy) * (bx - ax)
+        ) / d
         center = np.array([ux, uy])
         r = dist(center, a)
         return center, r
@@ -481,14 +429,11 @@ def _reock_for_geom(geom) -> float:
     return float(a / circle_area) if circle_area > 0 else np.nan
 
 
-# ============================== COMPACTNESS ==============================
 def compute_compactness(gdf: "gpd.GeoDataFrame") -> pd.DataFrame:
     g = gdf.to_crs(AREA_CRS).copy()
     assert_projected_planar(g, "compute_compactness")
 
-    # fix invalid polygons
     g["geometry"] = g.geometry.buffer(0)
-
     A = g.geometry.area
     P = g.geometry.length
 
@@ -499,9 +444,7 @@ def compute_compactness(gdf: "gpd.GeoDataFrame") -> pd.DataFrame:
     hull_area = hull.area
     out["convex_hull_ratio"] = (A / hull_area).where(hull_area > 0)
 
-    # Schwartzberg: perimeter / circumference of equal-area circle
     out["schwartzberg"] = (P / (2 * np.sqrt(math.pi * A))).where(A > 0)
-
     out["reock"] = g.geometry.apply(_reock_for_geom)
     return out
 
@@ -539,7 +482,6 @@ def run_etl(
         df = read_any(path).drop_duplicates(ignore_index=True)
         df = stdcols(df)
 
-        # Elections: tall -> wide
         if path == elections_path and not is_geodf(df):
             if is_tall_elections(df):
                 print(f"[ETL] Detected tall elections file. Cleaning office='{elections_office}' → wide VTD votes.")
@@ -557,7 +499,6 @@ def run_etl(
 
                 df = tdf  # for sqlite
 
-        # Persist cleaned parquet/geoparquet
         if is_geodf(df):
             gdf = ensure_crs(df)
             out_geo = out_geo_dir / f"{name}.parquet"
@@ -570,7 +511,6 @@ def run_etl(
             df.to_parquet(out_parquet, index=False)
             sql_df = df
 
-        # SQLite write (robust: drop-if-exists + append)
         from sqlalchemy import create_engine
         eng = create_engine(f"sqlite:///{sqlite_path}")
         with eng.begin() as conn:
@@ -618,65 +558,128 @@ def build_final(
     blocks = ensure_crs(stdcols(gpd.read_parquet(census_fp)))
     vtd = ensure_crs(stdcols(gpd.read_parquet(vtds_fp)))
 
+    # ---- FIX: avoid duplicate 'cntyvtd' later by renaming the raw shapefile field immediately ----
+    if "cntyvtd" in vtd.columns:
+        vtd = vtd.rename(columns={"cntyvtd": "cntyvtd_raw"})
+
     pl = unify_pl94_schema(pd.read_parquet(pl_fp))
     elec = stdcols(pd.read_parquet(elect_fp))
 
-    # ---- VTD key from geometry ----
+    # ---------- VTD keys ----------
     vtd = vtd.copy()
-    if {"cntykey", "vtdkey"} <= set(vtd.columns):
-        vtd["cntyvtd_std"] = (
-            vtd["cntykey"].astype("string").str.zfill(3)
-            + vtd["vtdkey"].astype("string").str.upper().str.replace(r"[^A-Z0-9]", "", regex=True).str.zfill(5)
-        )
+    vtd_width = 6
+    if "vtdkey" in vtd.columns:
+        vtd_width = infer_vtd_width_from_series(vtd["vtdkey"], default=6)
+
+    if "cntyvtd_raw" in vtd.columns:
+        vtd["cntyvtd_std"] = normalize_cntyvtd_flexible(vtd["cntyvtd_raw"], vtd_width=vtd_width)
+    elif {"cntykey", "vtdkey"} <= set(vtd.columns):
+        cnty = vtd["cntykey"].astype("string").str.replace(r"[^\d]", "", regex=True).str.zfill(3)
+        vtdk = vtd["vtdkey"].astype("string").str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
+        digits = vtdk.str.replace(r"[^0-9]", "", regex=True).str.zfill(vtd_width)
+        suf = vtdk.str.replace(r"[^A-Z]", "", regex=True)
+        vtd["cntyvtd_std"] = (cnty + digits + suf.fillna("")).astype("string")
     elif {"cnty", "vtd"} <= set(vtd.columns):
-        vtd["cntyvtd_std"] = build_cntyvtd_from_parts(vtd["cnty"], vtd["vtd"])
-    elif "cntyvtd" in vtd.columns:
-        vtd["cntyvtd_std"] = normalize_cntyvtd_safely(vtd["cntyvtd"])
+        raw = (vtd["cnty"].astype("string") + vtd["vtd"].astype("string")).astype("string")
+        vtd["cntyvtd_std"] = normalize_cntyvtd_flexible(raw, vtd_width=vtd_width)
     else:
         raise ValueError("Cannot construct CNTYVTD key for VTD geometries.")
 
-    # ---- Elections key ----
+    vtd["cntyvtd_digits"] = digits_only_cntyvtd(vtd["cntyvtd_std"], vtd_width=vtd_width)
+
+    # ---------- Elections keys ----------
     if "cntyvtd" not in elec.columns:
-        raise ValueError("Wide elections parquet missing cntyvtd column (should be produced by Stage 1).")
+        raise ValueError("Wide elections parquet missing cntyvtd column.")
+
     elec = elec.copy()
-    elec["cntyvtd_std"] = normalize_cntyvtd_safely(elec["cntyvtd"]).fillna(
-        elec["cntyvtd"].astype(str).str.upper().str.replace(r"[^A-Z0-9]", "", regex=True)
-    )
+    elec["k_std_5"] = normalize_cntyvtd_flexible(elec["cntyvtd"], vtd_width=5)
+    elec["k_std_6"] = normalize_cntyvtd_flexible(elec["cntyvtd"], vtd_width=6)
+    elec["k_dig_5"] = digits_only_cntyvtd(elec["k_std_5"], vtd_width=5)
+    elec["k_dig_6"] = digits_only_cntyvtd(elec["k_std_6"], vtd_width=6)
 
     vtd = vtd.loc[vtd["cntyvtd_std"].notna()].copy()
-    elec = elec.loc[elec["cntyvtd_std"].notna()].copy()
+    elec = elec.loc[elec["cntyvtd"].notna()].copy()
 
-    print(f"[INFO] VTD keys — geo: {vtd['cntyvtd_std'].nunique()} unique, elections: {elec['cntyvtd_std'].nunique()} unique")
+    print(f"[INFO] VTD keys — geo: {vtd['cntyvtd_std'].nunique()} unique, elections: {elec['cntyvtd'].nunique()} raw unique")
 
-    # ---- Blocks + PL merge ----
+    # ---------- Blocks + PL merge (robust) ----------
     blocks = ensure_geoid20_str(blocks)
     pl = ensure_geoid20_str(pl)
 
-    if "geoid20" not in blocks.columns:
-        raise ValueError("Blocks geometry must have geoid20 column after standardization.")
-    if "geoid20" not in pl.columns:
-        raise ValueError("Blocks_Pop file must have geoid20 after unification.")
+    total_col, race_map = pick_pop_columns(pl)
 
-    blocks_pl = blocks.merge(pl, on="geoid20", how="left")
+    candidate_join_keys = ["geoid20", "ctbkey", "blkkey"]
+    available_pairs = [k for k in candidate_join_keys if (k in blocks.columns and k in pl.columns)]
+    if not available_pairs:
+        raise ValueError(
+            "No common join key between blocks shapefile and Blocks_Pop table. "
+            f"Need at least one of {candidate_join_keys} present in BOTH."
+        )
 
-    total_col, race_map = pick_pop_columns(blocks_pl)
+    pl_cols_needed = list(dict.fromkeys(available_pairs + [total_col, *race_map.values()]))
+    pl_small = pl[pl_cols_needed].copy()
 
-    # numeric coercion
+    for k in ["ctbkey", "blkkey"]:
+        if k in blocks.columns:
+            blocks[k] = blocks[k].astype("string").str.strip()
+        if k in pl_small.columns:
+            pl_small[k] = pl_small[k].astype("string").str.strip()
+
+    if "geoid20" in blocks.columns:
+        blocks["geoid20"] = (
+            blocks["geoid20"].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.zfill(15)
+        )
+    if "geoid20" in pl_small.columns:
+        pl_small["geoid20"] = (
+            pl_small["geoid20"].astype(str)
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"[^\d]", "", regex=True)
+            .str.zfill(15)
+        )
+
+    def _merge_and_rate(left: gpd.GeoDataFrame, right: pd.DataFrame, key: str) -> tuple[gpd.GeoDataFrame, float]:
+        out = left.merge(right, on=key, how="left")
+        rate = out[total_col].notna().mean() if total_col in out.columns else 0.0
+        return out, float(rate)
+
+    best_df = None
+    best_key = None
+    best_rate = -1.0
+    for key in ["geoid20", "ctbkey", "blkkey"]:
+        if key not in available_pairs:
+            continue
+        merged, rate = _merge_and_rate(blocks, pl_small, key)
+        if rate > best_rate:
+            best_df, best_key, best_rate = merged, key, rate
+
+    if best_df is None:
+        raise ValueError("Internal error: could not merge blocks with Blocks_Pop using any candidate key.")
+    if best_rate < 0.90:
+        raise ValueError(
+            f"Low join match rate when merging blocks with Blocks_Pop: {best_rate:.2%}. "
+            f"Tried keys: {available_pairs}. Best key was '{best_key}'. "
+            "This will make pct_* null."
+        )
+
+    blocks_pl = best_df
+    print(f"[INFO] Blocks_Pop join key selected: {best_key} (match rate {best_rate:.2%})")
+
     blocks_pl[total_col] = pd.to_numeric(blocks_pl[total_col], errors="coerce").fillna(0)
     for rc in race_map.values():
         blocks_pl[rc] = pd.to_numeric(blocks_pl[rc], errors="coerce").fillna(0)
 
-    # project for overlays/compactness
+    # ---------- Project + clean geometry ----------
     blocks_proj = blocks_pl.to_crs(AREA_CRS)
-    vtd_proj = vtd.to_crs(AREA_CRS)
+    vtd_proj = vtd.to_crs(AREA_CRS)  # carries key cols forward
     assert_projected_planar(blocks_proj, "blocks->VTD")
     assert_projected_planar(vtd_proj, "blocks->VTD")
 
-    # fix invalid polygons
     blocks_proj["geometry"] = blocks_proj.geometry.buffer(0)
     vtd_proj["geometry"] = vtd_proj.geometry.buffer(0)
 
-    # Index VTDs ONCE
     vtd_proj = vtd_proj.reset_index(drop=True)
     vtd_proj["vtd_idx"] = vtd_proj.index
 
@@ -689,16 +692,12 @@ def build_final(
     d = districts_proj.reset_index(drop=True).copy()
     d["district_idx"] = d.index
 
-    v_for_overlay = vtd_proj[["vtd_idx", "geometry"]].copy()
-    d_for_overlay = d[["district_idx", "geometry"]].copy()
-
     inter_vtd_dist = gpd.overlay(
-        v_for_overlay,
-        d_for_overlay,
+        vtd_proj[["vtd_idx", "geometry"]],
+        d[["district_idx", "geometry"]],
         how="intersection",
         keep_geom_type=True,
     )
-
     if inter_vtd_dist.empty:
         vtd_proj["district_id"] = pd.NA
     else:
@@ -708,80 +707,124 @@ def build_final(
             .sort_values("inter_area", ascending=False)
             .drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
         )
-
         id_col = pick_district_id_col(districts_proj)
         if id_col is not None:
-            best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left")
-            best = best.rename(columns={id_col: "district_id"})
+            best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(columns={id_col: "district_id"})
         else:
             best["district_id"] = best["district_idx"] + 1
-
         vtd_proj = vtd_proj.merge(best[["vtd_idx", "district_id"]], on="vtd_idx", how="left")
 
     # ============================================================
-    # Blocks -> VTD overlay (intersection) and area-weighting
+    # Blocks -> VTD overlay and area-weighting
     # ============================================================
+    print("[INFO] Overlay blocks -> VTDs (intersection)...")
     blk = blocks_proj[["geoid20", "geometry"]].copy()
     blk_attrs = blocks_proj[["geoid20", total_col, *race_map.values()]].copy()
     vtd_sub = vtd_proj[["vtd_idx", "geometry"]].copy()
 
-    print("[INFO] Overlay blocks -> VTDs (intersection)...")
-    inter = gpd.overlay(blk, vtd_sub, how="intersection", keep_geom_type=True)
-    inter = inter.merge(blk_attrs, on="geoid20", how="left")  # <-- IMPORTANT: closed paren
+    inter = gpd.overlay(blk, vtd_sub, how="intersection", keep_geom_type=False)
+    if inter.empty:
+        raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
+    inter = inter.merge(blk_attrs, on="geoid20", how="left")
 
-    # area weighting
     blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
-    inter["blk_area"] = blk_area.loc[inter["geoid20"]].values
+    inter["blk_area"] = blk_area.reindex(inter["geoid20"]).values
     inter["inter_area"] = inter.geometry.area
+
     inter = inter.loc[inter["blk_area"] > 0].copy()
     inter["w"] = (inter["inter_area"] / inter["blk_area"]).clip(0, 1)
 
-    # weighted sums
     sum_cols = [total_col] + list(race_map.values())
     for c in sum_cols:
-        inter[c] = inter[c].fillna(0) * inter["w"]
+        inter[c] = pd.to_numeric(inter[c], errors="coerce").fillna(0) * inter["w"]
 
-    agg = inter.groupby("vtd_idx", observed=True)[sum_cols].sum().reindex(vtd_proj["vtd_idx"], fill_value=0)
+    agg = (
+        inter.groupby("vtd_idx", observed=True)[sum_cols]
+        .sum()
+        .reindex(vtd_proj["vtd_idx"], fill_value=0)
+    )
 
-    # race shares
     den = agg[total_col].replace({0: np.nan})
     race_pct = pd.DataFrame(index=agg.index)
     for out_name, src_col in race_map.items():
         race_pct[out_name] = (agg[src_col] / den).where(den > 0)
 
-    # ---- Elections join (ensure not-missing shares) ----
+    # ============================================================
+    # Elections join: auto-pick best key variant
+    # ============================================================
     required_vote_cols = ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
     for c in required_vote_cols:
         if c not in elec.columns:
             raise ValueError(f"Elections wide table missing expected column: {c}")
 
-    elec_agg = elec.groupby("cntyvtd_std", as_index=False)[required_vote_cols].sum()
+    if float(pd.to_numeric(elec["total_votes"], errors="coerce").fillna(0).sum()) == 0.0:
+        raise ValueError("Your elections-wide table has total_votes sum=0 BEFORE any join (Stage 1 produced zeros).")
 
-    vtd_with_votes = vtd_proj.merge(elec_agg, how="left", left_on="cntyvtd_std", right_on="cntyvtd_std")
+    vtd_proj["k_std_5"] = normalize_cntyvtd_flexible(vtd_proj["cntyvtd_std"], vtd_width=5)
+    vtd_proj["k_std_6"] = normalize_cntyvtd_flexible(vtd_proj["cntyvtd_std"], vtd_width=6)
+    vtd_proj["k_dig_5"] = digits_only_cntyvtd(vtd_proj["k_std_5"], vtd_width=5)
+    vtd_proj["k_dig_6"] = digits_only_cntyvtd(vtd_proj["k_std_6"], vtd_width=6)
 
-    # no-match => 0 votes, then compute shares
+    elec_aggs = {}
+    for kcol in ["k_std_5", "k_std_6", "k_dig_5", "k_dig_6"]:
+        tmp = elec.loc[elec[kcol].notna()].groupby(kcol, as_index=False)[required_vote_cols].sum()
+        elec_aggs[kcol] = tmp
+
+    candidates = []
+    for kcol in ["k_std_6", "k_dig_6", "k_std_5", "k_dig_5"]:
+        geo_keys = set(vtd_proj[kcol].dropna().unique().tolist())
+        ele_keys = set(elec_aggs[kcol][kcol].dropna().unique().tolist())
+        overlap = len(geo_keys & ele_keys)
+        candidates.append((kcol, overlap))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    best_k = candidates[0][0]
+    if candidates[0][1] == 0:
+        raise ValueError(
+            "After building multiple CNTYVTD key variants, overlap is still 0 for all joins.\n"
+            f"Overlap by variant: {candidates}\n"
+            "This means elections precinct IDs are not the same universe/format as the VTD shapefile."
+        )
+
+    joined = vtd_proj.merge(
+        elec_aggs[best_k],
+        how="left",
+        left_on=best_k,
+        right_on=best_k,
+    )
+
     for c in required_vote_cols:
-        vtd_with_votes[c] = pd.to_numeric(vtd_with_votes[c], errors="coerce").fillna(0)
+        joined[c] = pd.to_numeric(joined[c], errors="coerce").fillna(0)
 
-    tot = vtd_with_votes["total_votes"]
-    vtd_with_votes["dem_share"] = (vtd_with_votes["dem_votes"] / tot).where(tot > 0, 0.0)
-    vtd_with_votes["rep_share"] = (vtd_with_votes["rep_votes"] / tot).where(tot > 0, 0.0)
+    if float(joined["total_votes"].sum()) == 0.0:
+        raise ValueError(
+            f"Elections join selected variant '{best_k}' (overlap {candidates[0][1]}) "
+            "but total_votes still sums to 0 after join."
+        )
+
+    print(f"[INFO] Elections join selected key variant: {best_k} (overlap {candidates[0][1]})")
+
+    tot = joined["total_votes"]
+    joined["dem_share"] = (joined["dem_votes"] / tot).where(tot > 0, 0.0)
+    joined["rep_share"] = (joined["rep_votes"] / tot).where(tot > 0, 0.0)
 
     # ---- Compactness ----
     print("[INFO] Computing VTD compactness ...")
     cmpx = compute_compactness(vtd_proj)
 
     # ---- Assemble final ----
-    final = vtd_with_votes.join(cmpx, on="vtd_idx").join(race_pct, on="vtd_idx")
+    final = joined.join(cmpx, on="vtd_idx").join(race_pct, on="vtd_idx")
 
-    # ensure single cntyvtd
-    if "cntyvtd" in final.columns and "cntyvtd_std" in final.columns:
-        final = final.drop(columns=["cntyvtd"], errors="ignore")
+    # rename standardized key to your required output column
     final = final.rename(columns={"cntyvtd_std": "cntyvtd"})
 
     keep = FINAL_COLUMNS + (["geometry"] if KEEP_GEOMETRY else [])
     keep = [c for c in keep if c in final.columns]
     final = final[keep].copy()
+
+    # ---- Safety net: remove duplicate column names (pyarrow forbids them) ----
+    if final.columns.duplicated().any():
+        final = final.loc[:, ~final.columns.duplicated()].copy()
 
     missing_cols = [c for c in FINAL_COLUMNS if c not in final.columns]
     if missing_cols:
@@ -794,12 +837,12 @@ def build_final(
 # ============================== CLI ==============================
 def main():
     ap = argparse.ArgumentParser(description="ETL + VTD-level dataset (one row per VTD)")
-    ap.add_argument("--districts", type=Path, required=True, help="District polygons (SHP/GPKG/GeoParquet)")
-    ap.add_argument("--census", type=Path, required=True, help="2020 Census blocks polygons (SHP/GPKG/GeoParquet)")
-    ap.add_argument("--vtds", type=Path, required=True, help="VTD polygons (SHP/GPKG/GeoParquet)")
-    ap.add_argument("--pl94", type=Path, required=True, help="Blocks_Pop-style attributes with GEOID20 (CSV/TSV/Parquet/TXT)")
-    ap.add_argument("--elections", type=Path, required=True, help="Tall elections file (CSV/TSV/Parquet)")
-    ap.add_argument("--elections-office", type=str, default="U.S. Sen", help="Office substring to filter (default: U.S. Sen)")
+    ap.add_argument("--districts", type=Path, required=True)
+    ap.add_argument("--census", type=Path, required=True)
+    ap.add_argument("--vtds", type=Path, required=True)
+    ap.add_argument("--pl94", type=Path, required=True)
+    ap.add_argument("--elections", type=Path, required=True)
+    ap.add_argument("--elections-office", type=str, default="U.S. Sen")
     ap.add_argument("--data-processed-tabular", type=Path, required=True)
     ap.add_argument("--data-processed-geospatial", type=Path, required=True)
     ap.add_argument("--sqlite", type=Path, required=True)
@@ -807,7 +850,6 @@ def main():
 
     input_files = [args.districts, args.census, args.vtds, args.pl94, args.elections]
 
-    # Stage 1
     run_etl(
         input_files=input_files,
         out_parquet_dir=args.data_processed_tabular,
@@ -816,10 +858,8 @@ def main():
         elections_office=args.elections_office,
     )
 
-    # Keys from filenames
     dk, ck, vk, pk, ek = [dataset_key(p) for p in input_files]
 
-    # Stage 2
     final = build_final(
         out_parquet_dir=args.data_processed_tabular,
         out_geo_dir=args.data_processed_geospatial,
@@ -830,7 +870,6 @@ def main():
         elections_key=ek,
     )
 
-    # Save
     out_pq = args.data_processed_tabular / "vtds_final.parquet"
     out_csv = args.data_processed_tabular / "vtds_final.csv"
     write_parquet(final, out_pq)
