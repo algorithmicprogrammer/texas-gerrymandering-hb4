@@ -1,3 +1,5 @@
+pymc
+arviz
 numpy
 shapely
 geopandas
