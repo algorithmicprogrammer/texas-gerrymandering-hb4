@@ -45,6 +45,31 @@ def read_any(path: Path):
         if gpd is None:
             raise ImportError("geopandas required to read geospatial file: " + str(path))
         return gpd.read_file(path)
+    # Treat .txt as a delimited table (PL94 exports are often | or tab delimited)
+    if ext in [".txt"]:
+        # Try to sniff delimiter from a sample
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            sample = f.read(8192)
+
+        # Common delimiters for PL-style exports
+        candidates = ["|", "\t", ",", ";"]
+
+        # Try Sniffer first; fall back to candidates
+        delim = None
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=candidates)
+            delim = dialect.delimiter
+        except Exception:
+            # fallback heuristic: pick the delimiter that appears most often
+            counts = {d: sample.count(d) for d in candidates}
+            delim = max(counts, key=counts.get)
+
+        # If no delimiter appears, fallback to fixed-width
+        if sample.count(delim) == 0:
+            return pd.read_fwf(path)
+
+        return pd.read_csv(path, sep=delim, engine="python")
+
     raise ValueError(f"Unsupported input file type: {path}")
 
 def ensure_crs(gdf):
