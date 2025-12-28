@@ -16,7 +16,41 @@ def is_tall_elections(df: pd.DataFrame) -> bool:
     cols = set(df.columns)
     return {"party", "votes"}.issubset(cols)
 
-def clean_vtd_election_returns(df: pd.DataFrame) -> pd.DataFrame:
+
+def _maybe_filter_office(df: pd.DataFrame, office_filter: str | None) -> pd.DataFrame:
+    """Filter tall election returns to a single contest if an office column exists.
+
+    Many Texas election files are *candidate-level* with an `Office` column. If you
+    don't filter, you'll accidentally sum across multiple contests.
+    """
+    if office_filter is None:
+        # If office exists and there are multiple contests, fail loudly.
+        if "office" in df.columns:
+            uniq = df["office"].dropna().astype(str).str.strip().unique()
+            uniq = [u for u in uniq if u]
+            if len(uniq) > 1:
+                raise ValueError(
+                    "Election returns contain multiple Office values, but no office_filter was provided. "
+                    f"Provide --elections-office-filter. Found examples: {uniq[:10]}"
+                )
+        return df
+
+    if "office" not in df.columns:
+        # Nothing to filter on.
+        return df
+
+    off = df["office"].astype(str).str.strip().str.casefold()
+    target = str(office_filter).strip().casefold()
+    out = df.loc[off == target].copy()
+    if out.empty:
+        examples = df["office"].dropna().astype(str).str.strip().unique().tolist()
+        raise ValueError(
+            f"No rows matched office_filter={office_filter!r}. "
+            f"Office examples in file: {examples[:15]}"
+        )
+    return out
+
+def clean_vtd_election_returns(df: pd.DataFrame, office_filter: str | None = None) -> pd.DataFrame:
     """
     Accepts either:
       * tall format with columns: cntyvtd, party, votes (plus optional election_id)
@@ -29,6 +63,9 @@ def clean_vtd_election_returns(df: pd.DataFrame) -> pd.DataFrame:
     if "cntyvtd" not in df.columns:
         raise ValueError("Election returns must include cntyvtd key column.")
     df["cntyvtd"] = df["cntyvtd"].astype("string").str.strip()
+
+    # If Office exists, filter to a single contest (or error if ambiguous)
+    df = _maybe_filter_office(df, office_filter)
 
     if is_tall_elections(df):
         df["party"] = df["party"].map(_normalize_party)

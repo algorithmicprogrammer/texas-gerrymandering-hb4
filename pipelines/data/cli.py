@@ -55,13 +55,39 @@ def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str
     }])
     write_parquet(df, processed_dir / "plans.parquet")
 
-def _infer_vtd_geoid_col(vtds: 'gpd.GeoDataFrame') -> str:
-    # Prefer TIGER-style GEOID columns
-    for cand in ["geoid20","geoid","vtdgeoid","vtd_geoid","geoid_20"]:
+def _construct_vtd_geoid_from_cntykey_vtdkey(vtds: 'gpd.GeoDataFrame') -> pd.Series:
+    """Construct a project-stable VTD GEOID from (state_fips, CNTYKEY, VTDKEY).
+
+    Your VTD shapefile columns (post-stdcols) typically include:
+      - cntykey: county numeric key (1..254)
+      - vtdkey: VTD numeric key
+
+    We define: vtd_geoid := '48' + zfill(cntykey,3) + zfill(vtdkey,6)
+    This is not necessarily TIGER's official GEOID, but it is deterministic and unique within TX.
+    """
+    if "cntykey" not in vtds.columns or "vtdkey" not in vtds.columns:
+        raise ValueError(
+            "VTD shapefile is missing cntykey/vtdkey needed to construct vtd_geoid. "
+            "Expected columns like CNTYKEY and VTDKEY."
+        )
+    cnty = pd.to_numeric(vtds["cntykey"], errors="coerce")
+    vtdk = pd.to_numeric(vtds["vtdkey"], errors="coerce")
+    if cnty.isna().any() or vtdk.isna().any():
+        raise ValueError("Could not parse cntykey/vtdkey as numbers for vtd_geoid construction.")
+    return (
+        "48"
+        + cnty.astype("int64").astype(str).str.zfill(3)
+        + vtdk.astype("int64").astype(str).str.zfill(6)
+    )
+
+
+def _infer_or_build_vtd_geoid(vtds: 'gpd.GeoDataFrame') -> pd.Series:
+    # Prefer TIGER-style GEOID columns if present
+    for cand in ["geoid20", "geoid", "vtdgeoid", "vtd_geoid", "geoid_20"]:
         if cand in vtds.columns:
-            return cand
-    # fallback: none
-    raise ValueError("Could not find a GEOID column in VTD shapefile. Add/rename to GEOID or GEOID20.")
+            return vtds[cand].astype("string").str.strip()
+    # Otherwise construct from CNTYKEY/VTDKEY (your provided schema)
+    return _construct_vtd_geoid_from_cntykey_vtdkey(vtds).astype("string")
 
 def build_processed_inputs(
     districts_path: Path,
@@ -78,6 +104,7 @@ def build_processed_inputs(
     election_year: int,
     election_office: str,
     election_stage: str,
+    elections_office_filter: str | None,
 ):
     if gpd is None:
         raise ImportError("geopandas required for this pipeline (districts/census/vtds are geospatial).")
@@ -97,14 +124,13 @@ def build_processed_inputs(
     # -----------------------------
     # Elections: clean wide by CNTYVTD
     # -----------------------------
-    elect_wide = clean_vtd_election_returns(elect_raw)
+    elect_wide = clean_vtd_election_returns(elect_raw, office_filter=elections_office_filter)
 
     # -----------------------------
     # VTD keys: build vtd_geoid + helper cntyvtd variants for robust join
     # -----------------------------
-    vtd_geoid_col = _infer_vtd_geoid_col(vtds)
     vtds = vtds.copy()
-    vtds["vtd_geoid"] = vtds[vtd_geoid_col].astype("string").str.strip()
+    vtds["vtd_geoid"] = _infer_or_build_vtd_geoid(vtds)
 
     # Your existing elections join works through CNTYVTD variants, so keep that as helper columns
     # If your VTD shapefile already includes CNTYVTD-like keys, use them; else derive from county+vtd fields.
@@ -284,7 +310,15 @@ def main():
     ap = argparse.ArgumentParser(description="Build processed inputs needed by the redistricting analysis pipeline (VTD+VAP, GEOID keys).")
     ap.add_argument("--districts", type=Path, required=True, help="District polygons (enacted plan).")
     ap.add_argument("--census", type=Path, required=True, help="Block geometries with geoid20 + demographics joins.")
-    ap.add_argument("--vtds", type=Path, required=True, help="VTD polygons (TIGER). Must include GEOID/GEOID20.")
+    ap.add_argument(
+        "--vtds",
+        type=Path,
+        required=True,
+        help=(
+            "VTD polygons. If GEOID/GEOID20 is present it will be used; otherwise vtd_geoid is constructed "
+            "as '48'+zfill(CNTYKEY,3)+zfill(VTDKEY,6)."
+        ),
+    )
     ap.add_argument("--pl94", type=Path, required=True, help="Block-level attributes keyed by geoid20. Should include VAP if available.")
     ap.add_argument("--elections", type=Path, required=True, help="Election returns keyed by CNTYVTD (tall or wide).")
     ap.add_argument("--out", type=Path, required=True, help="Output directory (data/processed).")
@@ -298,6 +332,15 @@ def main():
     ap.add_argument("--election-year", type=int, default=2020)
     ap.add_argument("--election-office", default="PRES")
     ap.add_argument("--election-stage", default="GENERAL")
+
+    ap.add_argument(
+        "--elections-office-filter",
+        default=None,
+        help=(
+            "If the elections file contains multiple contests (Office column), filter to this exact Office value "
+            "(case-insensitive), e.g. 'President' or 'U.S. Sen'. If omitted and multiple offices exist, the pipeline errors."
+        ),
+    )
 
     args = ap.parse_args()
 
@@ -316,6 +359,7 @@ def main():
         election_year=args.election_year,
         election_office=args.election_office,
         election_stage=args.election_stage,
+        elections_office_filter=args.elections_office_filter,
     )
 
 if __name__ == "__main__":
