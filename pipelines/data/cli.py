@@ -235,29 +235,33 @@ def build_processed_inputs(
     # -----------------------------
     # Demographics: blocks -> VTD (counts) => geo_vtd.parquet
     # -----------------------------
+    # Normalize GEOID on blocks and construct GEOID on PL table if needed
     blocks = ensure_geoid20_str(blocks, col="geoid20")
-    pl = unify_pl94_schema(pl)
+    pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
 
     # Join PL attributes onto blocks
-    if "geoid20" not in pl.columns:
-        raise ValueError("PL94 table must include geoid20 (block GEOID).")
-    pl["geoid20"] = pl["geoid20"].astype("string").str.strip()
+    pl["geoid20"] = pl["geoid20"].astype("string").str.strip().str.zfill(15)
+    blocks["geoid20"] = blocks["geoid20"].astype("string").str.strip().str.zfill(15)
 
     blocks2 = blocks.merge(pl, on="geoid20", how="left")
 
     total_col, race_map, mode = pick_pop_columns(blocks2)
 
-    # If we couldn't infer race columns, you should edit pick_pop_columns() in demographics.py to match your schema.
     if not race_map:
-        print("[WARN] No race columns inferred for VAP. geo_vtd will include only vap_total. Edit pick_pop_columns().")
+        print("[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
+              "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap).")
 
     # Intersect blocks with VTDs and area-weight
-    blk = blocks2[["geoid20","geometry"]].copy()
-    attrs = blocks2[["geoid20", total_col] + list(race_map.values())].copy()
+    blk = blocks2[["geoid20", "geometry"]].copy()
 
-    inter2 = gpd.overlay(blk, v[["vtd_idx","geometry"]], how="intersection", keep_geom_type=False)
+    # Build list of attribute columns to carry through overlay
+    attr_cols = [total_col] + list(race_map.values())
+    attrs = blocks2[["geoid20"] + attr_cols].copy()
+
+    inter2 = gpd.overlay(blk, v[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
     if inter2.empty:
         raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
+
     inter2 = inter2.merge(attrs, on="geoid20", how="left")
 
     blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
@@ -266,35 +270,28 @@ def build_processed_inputs(
     inter2 = inter2.loc[inter2["blk_area"] > 0].copy()
     inter2["w"] = (inter2["inter_area"] / inter2["blk_area"]).clip(0, 1)
 
-    sum_cols = [total_col] + list(race_map.values())
-    for c in sum_cols:
+    for c in attr_cols:
         inter2[c] = pd.to_numeric(inter2[c], errors="coerce").fillna(0) * inter2["w"]
 
-    agg = inter2.groupby("vtd_idx", observed=True)[sum_cols].sum().reindex(v["vtd_idx"], fill_value=0)
-
-    # Cast to int counts
+    agg = inter2.groupby("vtd_idx", observed=True)[attr_cols].sum().reindex(v["vtd_idx"], fill_value=0)
     agg = agg.apply(lambda s: np.rint(s).astype("int64"))
 
     geo = pd.DataFrame({"vtd_geoid": v["vtd_geoid"].astype("string")})
-    if mode == "vap":
-        geo["vap_total"] = agg[total_col].to_numpy()
-        # Map race cols into canonical outputs
-        for out_name, src_col in race_map.items():
-            geo[out_name] = agg[src_col].to_numpy()
-        # ensure vap_other exists
-        known = [c for c in ["vap_nh_white","vap_nh_black","vap_hisp","vap_nh_asian","vap_nh_native"] if c in geo.columns]
-        if known:
-            geo["vap_other"] = (geo["vap_total"] - geo[known].sum(axis=1)).clip(lower=0).astype("int64")
-        else:
-            geo["vap_other"] = 0
+    geo["vap_total"] = agg[total_col].to_numpy()
+
+    for out_name, src_col in race_map.items():
+        geo[out_name] = agg[src_col].to_numpy()
+
+    # vap_other = total - known groups (clip at 0)
+    known_cols = [c for c in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian"] if c in geo.columns]
+    if known_cols:
+        geo["vap_other"] = (geo["vap_total"] - geo[known_cols].sum(axis=1)).clip(lower=0).astype("int64")
     else:
-        # fallback; still write columns but note they are total-pop-based
-        geo["vap_total"] = agg[total_col].to_numpy()
         geo["vap_other"] = 0
 
-    # Optional extras
     geo["state_fips"] = "48"
     write_parquet(geo, outs["geo_vtd"])
+
 
     # -----------------------------
     # Metadata tables

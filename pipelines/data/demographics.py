@@ -1,60 +1,111 @@
 from __future__ import annotations
-import re
+
 import pandas as pd
 
-def ensure_geoid20_str(df: pd.DataFrame, col: str = "geoid20") -> pd.DataFrame:
-    df = df.copy()
-    if col not in df.columns:
-        raise ValueError(f"Missing {col} in blocks/census data.")
-    df[col] = df[col].astype("string").str.strip()
-    return df
 
 def unify_pl94_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Attempts to harmonize PL94-like columns to a standard set.
-    This is intentionally flexible; you can point it at your own PL/ACS extracts.
+    Light harmonization: lowercase/strip column names.
+    (Your pipeline uses stdcols() elsewhere; this is an extra safety net.)
     """
-    df = df.copy()
-    df.columns = [c.strip().lower() for c in df.columns]
-    return df
+    out = df.copy()
+    out.columns = [c.strip().lower() for c in out.columns]
+    return out
+
+
+def ensure_geoid20_str(df: pd.DataFrame, col: str = "geoid20") -> pd.DataFrame:
+    """
+    Ensure the dataframe has a block GEOID column `col` as a 15-character string.
+
+    Works for BOTH:
+      - TIGER blocks shapefile attribute tables (often already have GEOID20)
+      - Your PL94-like Blocks_Pop table (constructable from State + FIPS + TRT + BLK)
+
+    Construction rule for your Blocks_Pop.txt:
+      geoid20 = zfill(State,2) + zfill(FIPS,3) + zfill(TRT,6) + zfill(BLK,4)
+    """
+    out = df.copy()
+    out.columns = [c.strip().lower() for c in out.columns]
+
+    # If requested col exists, just normalize
+    if col in out.columns:
+        out[col] = out[col].astype(str).str.strip().str.zfill(15)
+        return out
+
+    # Common aliases in TIGER-like tables
+    alias_map = {
+        "geoid20": "geoid20",
+        "geoid": "geoid20",
+        "tabblock20": "geoid20",
+        "block_geoid": "geoid20",
+        "block_geoid20": "geoid20",
+        "geoid_20": "geoid20",
+    }
+    for a, target in alias_map.items():
+        if a in out.columns and target == col:
+            out = out.rename(columns={a: col})
+            out[col] = out[col].astype(str).str.strip().str.zfill(15)
+            return out
+
+    # Construct from your PL table's components (after unify/stdcols -> lowercase)
+    required = ["state", "fips", "trt", "blk"]
+    if all(c in out.columns for c in required):
+        st = pd.to_numeric(out["state"], errors="coerce").fillna(0).astype(int).astype(str).str.zfill(2)
+        co = out["fips"].astype(str).str.strip().str.zfill(3)
+        tr = out["trt"].astype(str).str.strip().str.zfill(6)
+        bl = out["blk"].astype(str).str.strip().str.zfill(4)
+        out[col] = (st + co + tr + bl).astype(str).str.strip().str.zfill(15)
+        return out
+
+    raise ValueError(
+        f"Missing {col}. Could not find an alias (GEOID/GEOID20/TABBLOCK20) "
+        "and could not construct from State+FIPS+TRT+BLK."
+    )
+
 
 def pick_pop_columns(df: pd.DataFrame):
     """
-    Heuristic: Prefer VAP columns if present, otherwise fall back to total pop columns.
-
-    Returns:
-      total_col: str
-      race_map: dict[out_col -> src_col] where out_col matches canonical names
+    Return (total_col, race_map, mode) where:
+      - total_col is the column holding total VAP
+      - race_map maps canonical output names -> source columns
+      - mode is 'vap' (what we want)
+    This matches what cli.py expects.
     """
-    cols = set(df.columns)
-    # Try VAP first
-    vap_total_candidates = [c for c in cols if re.search(r"\bvap\b.*total|vap_total|totvap", c)]
-    if vap_total_candidates:
-        total_col = sorted(vap_total_candidates)[0]
-        # These mappings depend on your extract naming; adjust if needed.
-        # We'll search for common patterns.
-        def find(patterns):
-            for pat in patterns:
-                for c in cols:
-                    if re.search(pat, c):
-                        return c
-            return None
+    cols = {c.strip().lower(): c for c in df.columns}
 
-        m = {
-            "vap_nh_white": find([r"nh_?white.*vap", r"vap.*nh_?white", r"white_nh_vap"]),
-            "vap_nh_black": find([r"nh_?black.*vap", r"vap.*nh_?black", r"black_nh_vap"]),
-            "vap_hisp": find([r"hisp.*vap", r"vap.*hisp"]),
-            "vap_nh_asian": find([r"nh_?asian.*vap", r"vap.*nh_?asian", r"asian_nh_vap"]),
-            "vap_nh_native": find([r"nh_?(ai(an)?|native).*vap", r"vap.*nh_?(ai(an)?|native)"]),
-        }
-        # Only keep found
-        race_map = {k:v for k,v in m.items() if v is not None}
-        return total_col, race_map, "vap"
-    # Fallback: total population style
-    total_candidates = [c for c in cols if c in {"total","totpop","pop_total","total_pop","tot"}]
-    total_col = sorted(total_candidates)[0] if total_candidates else None
-    if total_col is None:
-        raise ValueError("Could not infer total population column in PL/blocks table.")
-    # Very rough fallback mapping; you will likely want to adjust based on your PL schema.
-    race_map = {}
-    return total_col, race_map, "pop"
+    # Your Blocks_Pop schema has these (lowercased by stdcols/unify)
+    total_vap = cols.get("vap")
+    anglo_vap = cols.get("anglovap")
+    black_vap = cols.get("blackvap")
+    hisp_vap = cols.get("hispvap")
+    asian_vap = cols.get("asianvap")
+
+    if total_vap is None:
+        raise ValueError("Could not find total VAP column 'vap' in merged blocks table.")
+
+    missing = [name for name, col in [
+        ("anglovap", anglo_vap),
+        ("blackvap", black_vap),
+        ("hispvap", hisp_vap),
+        ("asianvap", asian_vap),
+    ] if col is None]
+
+    # If race breakdown missing, still allow pipeline to proceed with total only
+    if missing:
+        return total_vap, {}, "vap"
+
+    race_map = {
+        # Canonical outputs -> source cols
+        "vap_nh_white": anglo_vap,   # 'anglo' used as NH-white proxy in this TX dataset
+        "vap_nh_black": black_vap,
+        "vap_hisp": hisp_vap,
+        "vap_nh_asian": asian_vap,
+        # not explicitly present in your schema
+        "vap_nh_native": None,
+    }
+
+    # Remove None values for downstream list(race_map.values())
+    race_map = {k: v for k, v in race_map.items() if v is not None}
+
+    return total_vap, race_map, "vap"
+
