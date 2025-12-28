@@ -258,6 +258,20 @@ def build_processed_inputs(
     attr_cols = [total_col] + list(race_map.values())
     attrs = blocks2[["geoid20"] + attr_cols].copy()
 
+    # Make sure blocks and VTDs use the same projected CRS before overlay
+    if blk.crs is None:
+        raise ValueError("Blocks CRS is None; cannot overlay. Assign CRS first.")
+
+    if v.crs is None:
+        raise ValueError("VTD CRS is None; cannot overlay. Assign CRS first.")
+
+    # Reproject blocks to VTD CRS
+    if blk.crs != v.crs:
+        blk = blk.to_crs(v.crs)
+
+    # (Optional but recommended) ensure planar CRS for area computations
+    assert_projected_planar(v, "VTDs")
+
     inter2 = gpd.overlay(blk, v[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
     if inter2.empty:
         raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
