@@ -19,6 +19,7 @@ from .elections import clean_vtd_election_returns
 from .demographics import ensure_geoid20_str, unify_pl94_schema, pick_pop_columns
 from .districts import pick_district_id_col
 
+
 # -----------------------------
 # Canonical processed outputs
 # -----------------------------
@@ -31,6 +32,7 @@ def out_paths(processed_dir: Path):
         "plan_map": processed_dir / "plan_district_vtd.parquet",
     }
 
+
 def build_elections_meta(processed_dir: Path, election_id: str, year: int, office: str, stage: str, notes: str="") -> None:
     df = pd.DataFrame([{
         "election_id": election_id,
@@ -40,6 +42,7 @@ def build_elections_meta(processed_dir: Path, election_id: str, year: int, offic
         "notes": notes or None,
     }])
     write_parquet(df, processed_dir / "elections.parquet")
+
 
 def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str, ensemble_id: str) -> None:
     df = pd.DataFrame([{
@@ -55,16 +58,9 @@ def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str
     }])
     write_parquet(df, processed_dir / "plans.parquet")
 
+
 def _construct_vtd_geoid_from_cntykey_vtdkey(vtds: 'gpd.GeoDataFrame') -> pd.Series:
-    """Construct a project-stable VTD GEOID from (state_fips, CNTYKEY, VTDKEY).
-
-    Your VTD shapefile columns (post-stdcols) typically include:
-      - cntykey: county numeric key (1..254)
-      - vtdkey: VTD numeric key
-
-    We define: vtd_geoid := '48' + zfill(cntykey,3) + zfill(vtdkey,6)
-    This is not necessarily TIGER's official GEOID, but it is deterministic and unique within TX.
-    """
+    """Construct a project-stable VTD GEOID from CNTYKEY/VTDKEY."""
     if "cntykey" not in vtds.columns or "vtdkey" not in vtds.columns:
         raise ValueError(
             "VTD shapefile is missing cntykey/vtdkey needed to construct vtd_geoid. "
@@ -86,8 +82,8 @@ def _infer_or_build_vtd_geoid(vtds: 'gpd.GeoDataFrame') -> pd.Series:
     for cand in ["geoid20", "geoid", "vtdgeoid", "vtd_geoid", "geoid_20"]:
         if cand in vtds.columns:
             return vtds[cand].astype("string").str.strip()
-    # Otherwise construct from CNTYKEY/VTDKEY (your provided schema)
     return _construct_vtd_geoid_from_cntykey_vtdkey(vtds).astype("string")
+
 
 def build_processed_inputs(
     districts_path: Path,
@@ -122,78 +118,65 @@ def build_processed_inputs(
     elect_raw = stdcols(read_any(elections_path))
 
     # -----------------------------
-    # Elections: clean wide by CNTYVTD
-    # -----------------------------
-    elect_wide = clean_vtd_election_returns(elect_raw, office_filter=elections_office_filter)
-
-    # -----------------------------
-    # VTD keys: build vtd_geoid + helper cntyvtd variants for robust join
+    # VTD keys: build vtd_geoid and numeric vtdkey (for elections join)
     # -----------------------------
     vtds = vtds.copy()
     vtds["vtd_geoid"] = _infer_or_build_vtd_geoid(vtds)
 
-    # Your existing elections join works through CNTYVTD variants, so keep that as helper columns
-    # If your VTD shapefile already includes CNTYVTD-like keys, use them; else derive from county+vtd fields.
-    if "cntyvtd" in vtds.columns:
-        raw_cnty = vtds["cntyvtd"]
-    else:
-        # attempt from common fields: county + vtd
-        possible = None
-        for c in ["cntyvtd", "cntyvtd20", "countyvtd", "cnty_vtd"]:
-            if c in vtds.columns:
-                possible = vtds[c]
-                break
-        if possible is None:
-            raise ValueError("VTD shapefile is missing CNTYVTD-like identifier needed to join your elections. "
-                             "Add a column 'cntyvtd' matching the election returns universe, or change elections to use GEOID.")
-        raw_cnty = possible
+    # Ensure vtdkey is present (post-stdcols your VTDKEY becomes vtdkey)
+    if "vtdkey" not in vtds.columns:
+        raise ValueError("VTD shapefile is missing VTDKEY (expected column vtdkey after stdcols).")
+    vtds["vtdkey"] = pd.to_numeric(vtds["vtdkey"], errors="coerce").astype("Int64")
+    if vtds["vtdkey"].isna().any():
+        raise ValueError("Some VTDs have missing/non-numeric vtdkey; cannot join elections by vtdkey.")
 
-    vtd_width = infer_vtd_width_from_series(raw_cnty, default=6)
-    vtds["cntyvtd_std_5"] = normalize_cntyvtd_flexible(raw_cnty, vtd_width=5)
-    vtds["cntyvtd_std_6"] = normalize_cntyvtd_flexible(raw_cnty, vtd_width=6)
-    vtds["cntyvtd_dig_5"] = digits_only_cntyvtd(vtds["cntyvtd_std_5"], vtd_width=5)
-    vtds["cntyvtd_dig_6"] = digits_only_cntyvtd(vtds["cntyvtd_std_6"], vtd_width=6)
+    # Create indices now (used later in district + demographics overlays)
+    vtds = vtds.reset_index(drop=True).copy()
+    vtds["vtd_idx"] = np.arange(len(vtds))
 
-    elect_wide["k_std_5"] = normalize_cntyvtd_flexible(elect_wide["cntyvtd"], vtd_width=5)
-    elect_wide["k_std_6"] = normalize_cntyvtd_flexible(elect_wide["cntyvtd"], vtd_width=6)
-    elect_wide["k_dig_5"] = digits_only_cntyvtd(elect_wide["k_std_5"], vtd_width=5)
-    elect_wide["k_dig_6"] = digits_only_cntyvtd(elect_wide["k_std_6"], vtd_width=6)
+    # -----------------------------
+    # Elections: clean wide returns (prefer vtdkeyvalue key)
+    # -----------------------------
+    elect_wide = clean_vtd_election_returns(elect_raw, office_filter=elections_office_filter, prefer_key="vtdkey")
 
-    # Choose best join variant (same logic as your existing pipeline)
-    variants = [
-        ("cntyvtd_std_6", "k_std_6"),
-        ("cntyvtd_std_5", "k_std_5"),
-        ("cntyvtd_dig_6", "k_dig_6"),
-        ("cntyvtd_dig_5", "k_dig_5"),
-    ]
-    candidates = []
-    for left_col, right_col in variants:
-        left = set(vtds[left_col].dropna().astype(str))
-        right = set(elect_wide[right_col].dropna().astype(str))
-        candidates.append((left_col, right_col, len(left & right)))
-    candidates.sort(key=lambda t: t[2], reverse=True)
-    best_left, best_right, overlap = candidates[0]
-    if overlap == 0:
-        raise ValueError("No overlap between elections CNTYVTD keys and VTD shapefile keys after normalization. "
-                         "Fix key universe or supply VTDs with matching CNTYVTD.")
+    # Require that the cleaned elections include vtdkey (from vtdkeyvalue)
+    if "vtdkey" not in elect_wide.columns:
+        raise ValueError(
+            "Election file did not yield vtdkey after cleaning. "
+            "Your 2024 file should include vtdkeyvalue. Ensure it exists and is not blank."
+        )
 
-    # Build election returns at VTD_GEOID
-    joined = vtds[["vtd_geoid", best_left]].merge(
-        elect_wide[[best_right, "dem_votes", "rep_votes", "third_party_votes", "total_votes"]],
-        left_on=best_left, right_on=best_right, how="left"
+    elect_wide = elect_wide.copy()
+    elect_wide["vtdkey"] = pd.to_numeric(elect_wide["vtdkey"], errors="coerce").astype("Int64")
+
+    # Aggregate in case there are duplicates per vtdkey (multiple candidates/lines)
+    elect_wide = (
+        elect_wide.groupby("vtdkey", as_index=False)[["dem_votes", "rep_votes", "third_party_votes", "total_votes"]]
+        .sum()
     )
+
+    # Join elections to the VTD universe by vtdkey
+    joined = vtds[["vtd_geoid", "vtdkey"]].merge(elect_wide, on="vtdkey", how="left")
+
+    # IMPORTANT: do NOT fill missing election data with zeros.
+    # Missing means "no match / not reported in this file", not "0 votes cast".
     for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]:
-        joined[c] = pd.to_numeric(joined[c], errors="coerce").fillna(0).astype("int64")
+        joined[c] = pd.to_numeric(joined[c], errors="coerce")
 
     returns_vtd = pd.DataFrame({
         "election_id": election_id,
         "vtd_geoid": joined["vtd_geoid"].astype("string"),
-        "votes_total": joined["total_votes"].astype("int64"),
-        "votes_dem": joined["dem_votes"].astype("int64"),
-        "votes_rep": joined["rep_votes"].astype("int64"),
-        "votes_other": joined["third_party_votes"].astype("int64"),
+        "votes_total": joined["total_votes"].astype("Float64"),
+        "votes_dem": joined["dem_votes"].astype("Float64"),
+        "votes_rep": joined["rep_votes"].astype("Float64"),
+        "votes_other": joined["third_party_votes"].astype("Float64"),
     })
-    returns_vtd["dem_share"] = np.where(returns_vtd["votes_total"] > 0, returns_vtd["votes_dem"] / returns_vtd["votes_total"], np.nan)
+
+    # dem_share only where total > 0
+    returns_vtd["dem_share"] = pd.NA
+    mask = returns_vtd["votes_total"].notna() & (returns_vtd["votes_total"] > 0)
+    returns_vtd.loc[mask, "dem_share"] = (returns_vtd.loc[mask, "votes_dem"] / returns_vtd.loc[mask, "votes_total"])
+
     write_parquet(returns_vtd, outs["returns_vtd"])
 
     # -----------------------------
@@ -203,15 +186,12 @@ def build_processed_inputs(
     vtds = vtds.copy()
 
     # Project for area computations
-    # Use a projected CRS if currently geographic
     assert_projected_planar(districts, "districts")
     assert_projected_planar(vtds, "vtds")
 
-    # Overlay and take dominant intersection area
     d = districts.reset_index(drop=True).copy()
     d["district_idx"] = np.arange(len(d))
-    v = vtds.reset_index(drop=True).copy()
-    v["vtd_idx"] = np.arange(len(v))
+    v = vtds.reset_index(drop=True).copy()  # has vtd_idx already
 
     id_col = pick_district_id_col(d)
     inter = gpd.overlay(v[["vtd_idx","geometry"]], d[["district_idx","geometry"]], how="intersection", keep_geom_type=True)
@@ -235,11 +215,9 @@ def build_processed_inputs(
     # -----------------------------
     # Demographics: blocks -> VTD (counts) => geo_vtd.parquet
     # -----------------------------
-    # Normalize GEOID on blocks and construct GEOID on PL table if needed
     blocks = ensure_geoid20_str(blocks, col="geoid20")
     pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
 
-    # Join PL attributes onto blocks
     pl["geoid20"] = pl["geoid20"].astype("string").str.strip().str.zfill(15)
     blocks["geoid20"] = blocks["geoid20"].astype("string").str.strip().str.zfill(15)
 
@@ -251,25 +229,18 @@ def build_processed_inputs(
         print("[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
               "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap).")
 
-    # Intersect blocks with VTDs and area-weight
     blk = blocks2[["geoid20", "geometry"]].copy()
-
-    # Build list of attribute columns to carry through overlay
     attr_cols = [total_col] + list(race_map.values())
     attrs = blocks2[["geoid20"] + attr_cols].copy()
 
-    # Make sure blocks and VTDs use the same projected CRS before overlay
     if blk.crs is None:
         raise ValueError("Blocks CRS is None; cannot overlay. Assign CRS first.")
-
     if v.crs is None:
         raise ValueError("VTD CRS is None; cannot overlay. Assign CRS first.")
 
-    # Reproject blocks to VTD CRS
     if blk.crs != v.crs:
         blk = blk.to_crs(v.crs)
 
-    # (Optional but recommended) ensure planar CRS for area computations
     assert_projected_planar(v, "VTDs")
 
     inter2 = gpd.overlay(blk, v[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
@@ -296,7 +267,6 @@ def build_processed_inputs(
     for out_name, src_col in race_map.items():
         geo[out_name] = agg[src_col].to_numpy()
 
-    # vap_other = total - known groups (clip at 0)
     known_cols = [c for c in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian"] if c in geo.columns]
     if known_cols:
         geo["vap_other"] = (geo["vap_total"] - geo[known_cols].sum(axis=1)).clip(lower=0).astype("int64")
@@ -305,7 +275,6 @@ def build_processed_inputs(
 
     geo["state_fips"] = "48"
     write_parquet(geo, outs["geo_vtd"])
-
 
     # -----------------------------
     # Metadata tables
@@ -316,6 +285,7 @@ def build_processed_inputs(
     print("[OK] Wrote processed inputs:")
     for k, pth in outs.items():
         print(f"  {k}: {pth}")
+
 
 def main():
     ap = argparse.ArgumentParser(description="Build processed inputs needed by the redistricting analysis pipeline (VTD+VAP, GEOID keys).")
@@ -331,7 +301,7 @@ def main():
         ),
     )
     ap.add_argument("--pl94", type=Path, required=True, help="Block-level attributes keyed by geoid20. Should include VAP if available.")
-    ap.add_argument("--elections", type=Path, required=True, help="Election returns keyed by CNTYVTD (tall or wide).")
+    ap.add_argument("--elections", type=Path, required=True, help="Election returns (tall or wide). Prefer files with vtdkeyvalue.")
     ap.add_argument("--out", type=Path, required=True, help="Output directory (data/processed).")
 
     ap.add_argument("--plan-id", default="ENACTED_TXCD_2021")
@@ -373,5 +343,7 @@ def main():
         elections_office_filter=args.elections_office_filter,
     )
 
+
 if __name__ == "__main__":
     main()
+
