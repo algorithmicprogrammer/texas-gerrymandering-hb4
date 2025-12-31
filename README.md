@@ -199,16 +199,8 @@ python -m pipelines.data.cli \
   --vtds data/raw/vtds_24pg/VTDs_24PG.shp \
   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
   --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv \
-  --out data/processed \
-  --plan-id ENACTED_PLANC2333 \
-  --ensemble-id ENS_PLANC2333_BASELINE \
-  --cycle 2025 \
-  --chamber USCD \
-  --election-id TX_SEN_2024_GEN \
-  --election-year 2024 \
-  --election-office SEN \
-  --election-stage GENERAL \
-  --elections-office-filter "U.S. Sen"
+  --elections-office-filter "U.S. Sen" \
+  --out data/processed
 ```
 
 Run ETL pipeline in Windows 11.
