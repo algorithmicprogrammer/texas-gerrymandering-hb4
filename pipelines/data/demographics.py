@@ -53,9 +53,14 @@ def ensure_geoid20_str(df: pd.DataFrame, col: str = "geoid20") -> pd.DataFrame:
         "block_geoid20": "geoid20",
         "geoid_20": "geoid20",
     }
+
+    # Iterates over each alias and its target meaning.
     for a, target in alias_map.items():
+        # Checks if the alias exists in the DataFrame and if it corresponds with the enforced column name.
         if a in out.columns and target == col:
+            # Renames the alias column to the requested canonical name.
             out = out.rename(columns={a: col})
+            # Normalizes columns by type checking for string, trimming whitespaces, and zero-padding to 15 characters.
             out[col] = out[col].astype(str).str.strip().str.zfill(15)
             return out
 
