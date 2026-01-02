@@ -7,10 +7,12 @@ def unify_pl94_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardizes column names to reduce schema friction between data sources.
     Lowercasing column names and stripping leading/trailing whitespace.
+
     Args:
-        Pandas DataFrame
+        df: Pandas DataFrame
+
     Returns:
-        cleaned DataFrame
+        out: cleaned DataFrame
     """
     out = df.copy()
     out.columns = [c.strip().lower() for c in out.columns]
@@ -19,24 +21,30 @@ def unify_pl94_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def ensure_geoid20_str(df: pd.DataFrame, col: str = "geoid20") -> pd.DataFrame:
     """
-    Ensure the dataframe has a block GEOID column `col` as a 15-character string.
+    Guarantees that the DataFrame has a GEOID column as a 15-character zero-padded string.
 
-    Works for BOTH:
-      - TIGER blocks shapefile attribute tables (often already have GEOID20)
-      - Your PL94-like Blocks_Pop table (constructable from State + FIPS + TRT + BLK)
+    Args:
+        df: Pandas DataFrame
+        col: optional column name to enforce (defaults to "geoid20")
 
-    Construction rule for your Blocks_Pop.txt:
-      geoid20 = zfill(State,2) + zfill(FIPS,3) + zfill(TRT,6) + zfill(BLK,4)
+    Returns:
+        out: DataFrame
+
+    Raises:
+        ValueError: If col, an alias, and component columns don't exist.
     """
+
+    # Avoids mutating the input DataFrame.
     out = df.copy()
+    # Normalizing column names immediately so subsequent checks work reliably.
     out.columns = [c.strip().lower() for c in out.columns]
 
-    # If requested col exists, just normalize
+    # If GEOID column already exists, forcing it into standardized format.
     if col in out.columns:
         out[col] = out[col].astype(str).str.strip().str.zfill(15)
         return out
 
-    # Common aliases in TIGER-like tables
+    # Defines common alternative column names and maps them to the canonical meaning "geoid20".
     alias_map = {
         "geoid20": "geoid20",
         "geoid": "geoid20",
