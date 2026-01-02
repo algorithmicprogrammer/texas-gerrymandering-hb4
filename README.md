@@ -176,23 +176,10 @@ venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
-6. Run ETL pipeline in MacOS/Linux. 
-The datasets are massive and the areal-weighted spatial joins are computationally expensive, so this could take 30+ minutes.
-```
-python etl_pipeline.py \
-  --districts data/raw/PLANC2333/PLANC2333.shp \
-  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp \
-  --vtds data/raw/vtds_24pg/VTDs_24PG.shp \
-  --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
-  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv \
-  --elections-office "U.S. Sen" \
-  --data-processed-tabular data/processed/tabular \
-  --data-processed-geospatial data/processed/geospatial \
-  --sqlite data/warehouse/warehouse.db
-```
-Run data pipeline.
+6. Run data pipeline.
 
-```
+* Command for Linux/MacOS:
+```commandline
 python -m pipelines.data.cli \
   --districts data/raw/PLANC2333/PLANC2333.shp \
   --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp \
@@ -203,19 +190,41 @@ python -m pipelines.data.cli \
   --out data/processed
 ```
 
-Run ETL pipeline in Windows 11.
-```commandline
-python pipelines/data/etl_pipeline.py ^
-  --districts data/raw/PLANC2333/PLANC2333.shp ^
-  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
-  --vtds data/raw/vtds_24pg/VTDs_24PG.shp ^
-  --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt ^
-  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv ^
-  --elections-office "U.S. Sen" ^
-  --data-processed-tabular data/processed/tabular ^
-  --data-processed-geospatial data/processed/geospatial ^
-  --sqlite data/warehouse/warehouse.db
+7. Run ensemble-generating pipeline.
 
+* Command for Linus/MacOS:
+```commandline
+python -m pipelines.ensembles.generate_recom_ensemble \
+  --vtd-geo data/raw/vtds_24pg/VTDs_24PG.shp \
+  --geo-vtd data/processed/geo_vtd.parquet \
+  --enacted-plan-map data/processed/plan_district_vtd.parquet \
+  --ensemble-id ENS_TXCD_2024_recom_v1 \
+  --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
+  --out-plans data/processed/ensemble_plans.parquet \
+  --pop-col vap_total \
+  --epsilon 0.01 \
+  --n-steps 5000 \
+  --burnin 500 \
+  --thin 10 \
+  --seed 20240101
+```
+
+8. Run redistricting pipeline against ensemble.
+* Command for Linux/MacOS:
+```commandLine
+python -m pipelines.ensembles.generate_recom_ensemble \
+  --vtd-geo data/raw/vtds_24pg/VTDs_24PG.shp \
+  --geo-vtd data/processed/geo_vtd.parquet \
+  --enacted-plan-map data/processed/plan_district_vtd.parquet \
+  --ensemble-id ENS_TXCD_2024_recom_v1 \
+  --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
+  --out-plans data/processed/ensemble_plans.parquet \
+  --pop-col vap_total \
+  --epsilon 0.01 \
+  --n-steps 5000 \
+  --burnin 500 \
+  --thin 10 \
+  --seed 20240101
 ```
 
 ### Testing
