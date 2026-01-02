@@ -1,34 +1,56 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 import re
 from pathlib import Path
 import pandas as pd
-import numpy as np
 
+# Tries to import GeoPandas.
 try:
     import geopandas as gpd
-except Exception:  # pragma: no cover
+# If anything goes wrong, gpd is set to None.
+except Exception:
     gpd = None
 
+# Two tuples of recognized file extensions for tabular and geospatial data, respectively.
 SUPPORTED_TABULAR = (".csv", ".tsv", ".parquet", ".pq", ".feather")
 SUPPORTED_GEO = (".shp", ".gpkg", ".geojson", ".json", ".parquet", ".pq")
 
 def mkdir_p(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+# Returns a standardized-column version of a DataFrame.
 def stdcols(df: pd.DataFrame) -> pd.DataFrame:
+    # Avoid mutating original DataFrame.
     df = df.copy()
+    # Stripping whitespace and converting to lowercase.
     df.columns = [c.strip().lower() for c in df.columns]
     return df
 
+# Produces a "safe" dataset identifier from a file name.
 def dataset_key(path: Path) -> str:
+    # Replaces any characters that are not a-z, _, or 0-9 with an underscore.
     return re.sub(r"[^a-z0-9_]+", "_", path.stem.lower())
 
+# Detects whether an object behaves like a GeoDataFrame.
 def is_geodf(obj) -> bool:
+    # Checks whether geopandas is available and if the object has a geometry attribute that is not none.
     return gpd is not None and hasattr(obj, "geometry") and getattr(obj, "geometry") is not None
 
 def read_any(path: Path):
+    """"
+    Reads many formats into either a Pandas DataFrame or a GeoPandas GeoDataFrame depending on extension and availability.
+
+    Args:
+        path: filepath
+
+    Raises:
+        ImportError: if Geopandas is missing in a geospatial file
+        ValueError: if the input file type is not supported
+    """
+
+    # ext is the file extension in lowercase.
     ext = path.suffix.lower()
+
+    # If the file type is parquet, it reads it into a GeoDataFrame if it loads with geometry; reads it into Pandas DataFrame otherwise.
     if ext in (".parquet", ".pq"):
         if gpd is not None:
             try:
@@ -36,18 +58,26 @@ def read_any(path: Path):
             except Exception:
                 return pd.read_parquet(path)
         return pd.read_parquet(path)
+
+    # Reads Apache Feather format into a Pandas DataFrame.
     if ext == ".feather":
         return pd.read_feather(path)
+
+    # Reads CSV and TSV  into a Pandas DataFrame.
     if ext in (".csv", ".tsv"):
         sep = "\t" if ext == ".tsv" else ","
         return pd.read_csv(path, sep=sep)
+
+    # if the file extension is in a supported geospatial format and hasn't already matched earlier branches
     if ext in SUPPORTED_GEO:
+        # If GeoPandas is missing, raises an ImportError.
         if gpd is None:
             raise ImportError("geopandas required to read geospatial file: " + str(path))
         return gpd.read_file(path)
-    # Treat .txt as a delimited table (PL94 exports are often | or tab delimited)
+
+    # Special case for TXT files, which are common for Census demographics data.
     if ext in [".txt"]:
-        # Try to sniff delimiter from a sample
+        # Reads 8192 characters to guess delimiter.
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             sample = f.read(8192)
 
