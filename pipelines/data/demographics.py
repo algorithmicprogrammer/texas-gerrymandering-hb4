@@ -5,8 +5,12 @@ import pandas as pd
 
 def unify_pl94_schema(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Light harmonization: lowercase/strip column names.
-    (Your pipeline uses stdcols() elsewhere; this is an extra safety net.)
+    Standardizes column names to reduce schema friction between data sources.
+    Lowercasing column names and stripping leading/trailing whitespace.
+    Args:
+        Pandas DataFrame
+    Returns:
+        cleaned DataFrame
     """
     out = df.copy()
     out.columns = [c.strip().lower() for c in out.columns]
