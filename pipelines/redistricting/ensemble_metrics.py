@@ -1,125 +1,284 @@
 from __future__ import annotations
+
 import duckdb
-import numpy as np
-import pandas as pd
+
+
+def _table_has_column(con: duckdb.DuckDBPyConnection, table: str, col: str) -> bool:
+    rows = con.execute(f"PRAGMA table_info('{table}')").fetchall()
+    return any(r[1] == col for r in rows)
+
+
+def _get_columns(con: duckdb.DuckDBPyConnection, table: str) -> list[str]:
+    rows = con.execute(f"PRAGMA table_info('{table}')").fetchall()
+    return [r[1] for r in rows]
+
+
+def _ensemble_plan_filter(con: duckdb.DuckDBPyConnection, ensemble_id: str | None) -> tuple[str, list]:
+    """
+    Returns (where_sql, params) selecting ensemble plans from plan p.
+
+    Priority:
+      1) If plan has ensemble_id column and ensemble_id provided -> p.ensemble_id = ?
+      2) Else if ensemble_id provided -> CAST(p.plan_id AS VARCHAR) LIKE ?
+      3) Else if plan has plan_type -> p.plan_type = 'ensemble'
+      4) Else -> 1=1
+    """
+    has_ensemble_id = _table_has_column(con, "plan", "ensemble_id")
+    has_plan_type = _table_has_column(con, "plan", "plan_type")
+
+    if ensemble_id:
+        if has_ensemble_id:
+            return "p.ensemble_id = ?", [ensemble_id]
+        return "CAST(p.plan_id AS VARCHAR) LIKE ?", [f"%{ensemble_id}%"]
+
+    if has_plan_type:
+        return "p.plan_type = 'ensemble'", []
+
+    return "1=1", []
+
+
+def _plan_metrics_is_long(con: duckdb.DuckDBPyConnection) -> bool:
+    """
+    Determine whether plan_metrics is long-format:
+      columns include metric_name and metric_value
+    """
+    cols = set(_get_columns(con, "plan_metrics"))
+    return ("metric_name" in cols) and ("metric_value" in cols)
+
 
 def build_ensemble_distribution(
     con: duckdb.DuckDBPyConnection,
-    metric_name: str = "n_opportunity_districts",
+    metric_name: str,
+    ensemble_id: str | None = None,
 ) -> None:
-    con.execute("DELETE FROM ensemble_distribution;")
+    """
+    Build ensemble_distribution for a metric.
 
-    df = con.execute(f"""
-        SELECT p.ensemble_id, pm.opp_def_id, pm.{metric_name} AS value
-        FROM plan_metrics pm
-        JOIN plan p ON p.plan_id = pm.plan_id
-        WHERE p.plan_type = 'ENSEMBLE'
-    """).df()
+    Supports TWO plan_metrics schemas:
+      A) long-format:  plan_metrics(plan_id, metric_name, metric_value, ...)
+      B) wide-format:  plan_metrics(plan_id, <metric columns...>) and metric_name is a column name
+    """
+    tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+    if "plan_metrics" not in tables:
+        raise ValueError("plan_metrics table not found. Run the metrics stage first.")
+    if "plan" not in tables:
+        raise ValueError("plan table not found. Run the load stage first.")
 
-    if df.empty:
-        raise ValueError("No ensemble plans found. Check plan.plan_type and that plan_metrics is built.")
+    where_sql, params = _ensemble_plan_filter(con, ensemble_id)
 
-    quantiles = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
-    rows = []
+    # Clear previous rows for this key
+    con.execute(
+        """
+        DELETE FROM ensemble_distribution
+        WHERE metric_name = ?
+          AND ensemble_id IS NOT DISTINCT FROM ?
+        """,
+        [metric_name, ensemble_id],
+    )
 
-    for (ensemble_id, opp_def_id), g in df.groupby(["ensemble_id", "opp_def_id"]):
-        vals = pd.to_numeric(g["value"], errors="coerce").dropna().to_numpy()
-        if len(vals) == 0:
-            continue
-        qs = np.quantile(vals, quantiles)
-        rows.append({
-            "ensemble_id": ensemble_id,
-            "opp_def_id": opp_def_id,
-            "metric_name": metric_name,
-            "n_plans": int(len(vals)),
-            "mean": float(np.mean(vals)),
-            "sd": float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0,
-            "p01": float(qs[0]),
-            "p05": float(qs[1]),
-            "p10": float(qs[2]),
-            "p25": float(qs[3]),
-            "p50": float(qs[4]),
-            "p75": float(qs[5]),
-            "p90": float(qs[6]),
-            "p95": float(qs[7]),
-            "p99": float(qs[8]),
-            "min": float(np.min(vals)),
-            "max": float(np.max(vals)),
-        })
+    is_long = _plan_metrics_is_long(con)
 
-    out = pd.DataFrame(rows)
-    con.register("tmp_ensdist", out)
-    con.execute("INSERT INTO ensemble_distribution SELECT * FROM tmp_ensdist")
-    con.unregister("tmp_ensdist")
+    if is_long:
+        # Long format: filter rows by pm.metric_name
+        n = con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM plan p
+            JOIN plan_metrics pm ON pm.plan_id = p.plan_id
+            WHERE {where_sql}
+              AND pm.metric_name = ?
+            """,
+            params + [metric_name],
+        ).fetchone()[0]
+
+        if n == 0:
+            sample = con.execute("SELECT * FROM plan LIMIT 10").fetchdf()
+            pm_cols = con.execute("PRAGMA table_info('plan_metrics')").fetchdf()
+            raise ValueError(
+                "No ensemble plans/metrics found under current filter (long plan_metrics).\n"
+                f"ensemble_id={ensemble_id!r}, metric_name={metric_name!r}\n\n"
+                "plan_metrics columns:\n"
+                f"{pm_cols[['name','type']].to_string(index=False)}\n\n"
+                "Sample plan rows:\n"
+                f"{sample.to_string(index=False)}"
+            )
+
+        con.execute(
+            f"""
+            INSERT INTO ensemble_distribution (ensemble_id, metric_name, plan_id, metric_value)
+            SELECT
+                ? AS ensemble_id,
+                pm.metric_name,
+                pm.plan_id,
+                pm.metric_value
+            FROM plan p
+            JOIN plan_metrics pm ON pm.plan_id = p.plan_id
+            WHERE {where_sql}
+              AND pm.metric_name = ?
+            """,
+            [ensemble_id] + params + [metric_name],
+        )
+        return
+
+    # Wide format: metric_name is a COLUMN of plan_metrics
+    cols = set(_get_columns(con, "plan_metrics"))
+    if metric_name not in cols:
+        # Give a helpful error listing the available metric columns
+        # (exclude obvious ID-ish columns)
+        likely_metrics = [c for c in sorted(cols) if c not in {"plan_id", "district_id"}]
+        raise ValueError(
+            "plan_metrics is wide-format, but the requested metric_name is not a column.\n"
+            f"Requested metric_name={metric_name!r}\n"
+            f"Available columns (likely metrics): {likely_metrics[:50]}"
+            + (" ..." if len(likely_metrics) > 50 else "")
+        )
+
+    n = con.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM plan p
+        JOIN plan_metrics pm ON pm.plan_id = p.plan_id
+        WHERE {where_sql}
+          AND pm.{metric_name} IS NOT NULL
+        """,
+        params,
+    ).fetchone()[0]
+
+    if n == 0:
+        sample = con.execute("SELECT * FROM plan LIMIT 10").fetchdf()
+        raise ValueError(
+            "No ensemble plans found under current filter (wide plan_metrics).\n"
+            f"ensemble_id={ensemble_id!r}, metric_column={metric_name!r}\n\n"
+            "Sample plan rows:\n"
+            f"{sample.to_string(index=False)}"
+        )
+
+    # Insert using the column as the metric_value; store metric_name as label
+    con.execute(
+        f"""
+        INSERT INTO ensemble_distribution (ensemble_id, metric_name, plan_id, metric_value)
+        SELECT
+            ? AS ensemble_id,
+            ? AS metric_name,
+            pm.plan_id,
+            CAST(pm.{metric_name} AS DOUBLE) AS metric_value
+        FROM plan p
+        JOIN plan_metrics pm ON pm.plan_id = p.plan_id
+        WHERE {where_sql}
+          AND pm.{metric_name} IS NOT NULL
+        """,
+        [ensemble_id, metric_name] + params,
+    )
 
 
 def build_plan_vs_ensemble(
     con: duckdb.DuckDBPyConnection,
-    metric_name: str = "n_opportunity_districts",
+    metric_name: str,
+    ensemble_id: str | None = None,
 ) -> None:
-    con.execute("DELETE FROM plan_vs_ensemble;")
+    """
+    Compare each plan's metric_value to the ensemble distribution:
+      - ensemble_mean
+      - ensemble_sd
+      - ensemble_pctl (empirical percentile)
+    """
+    tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+    if "ensemble_distribution" not in tables:
+        raise ValueError("ensemble_distribution not found. Run build_ensemble_distribution first.")
+    if "plan_metrics" not in tables:
+        raise ValueError("plan_metrics not found. Run metrics stage first.")
 
-    ens_vals = con.execute(f"""
-        SELECT p.ensemble_id, pm.opp_def_id, pm.{metric_name} AS value
+    # Clear previous
+    con.execute(
+        """
+        DELETE FROM plan_vs_ensemble
+        WHERE metric_name = ?
+          AND ensemble_id IS NOT DISTINCT FROM ?
+        """,
+        [metric_name, ensemble_id],
+    )
+
+    is_long = _plan_metrics_is_long(con)
+
+    if is_long:
+        # plan_metrics has metric_name/metric_value rows
+        con.execute(
+            """
+            INSERT INTO plan_vs_ensemble (
+                ensemble_id, metric_name, plan_id, metric_value,
+                ensemble_mean, ensemble_sd, ensemble_pctl
+            )
+            WITH dist AS (
+                SELECT metric_value
+                FROM ensemble_distribution
+                WHERE metric_name = ?
+                  AND ensemble_id IS NOT DISTINCT FROM ?
+            ),
+            stats AS (
+                SELECT
+                    AVG(metric_value)::DOUBLE AS mu,
+                    STDDEV_SAMP(metric_value)::DOUBLE AS sd
+                FROM dist
+            )
+            SELECT
+                ? AS ensemble_id,
+                pm.metric_name,
+                pm.plan_id,
+                pm.metric_value,
+                s.mu AS ensemble_mean,
+                s.sd AS ensemble_sd,
+                (
+                    SELECT AVG(CASE WHEN d.metric_value <= pm.metric_value THEN 1 ELSE 0 END)::DOUBLE
+                    FROM dist d
+                ) AS ensemble_pctl
+            FROM plan_metrics pm
+            CROSS JOIN stats s
+            WHERE pm.metric_name = ?
+            """,
+            [metric_name, ensemble_id, ensemble_id, metric_name],
+        )
+        return
+
+    # Wide format: metric_name is a column name
+    cols = set(_get_columns(con, "plan_metrics"))
+    if metric_name not in cols:
+        raise ValueError(
+            f"plan_metrics is wide-format but has no column {metric_name!r}."
+        )
+
+    con.execute(
+        f"""
+        INSERT INTO plan_vs_ensemble (
+            ensemble_id, metric_name, plan_id, metric_value,
+            ensemble_mean, ensemble_sd, ensemble_pctl
+        )
+        WITH dist AS (
+            SELECT metric_value
+            FROM ensemble_distribution
+            WHERE metric_name = ?
+              AND ensemble_id IS NOT DISTINCT FROM ?
+        ),
+        stats AS (
+            SELECT
+                AVG(metric_value)::DOUBLE AS mu,
+                STDDEV_SAMP(metric_value)::DOUBLE AS sd
+            FROM dist
+        )
+        SELECT
+            ? AS ensemble_id,
+            ? AS metric_name,
+            pm.plan_id,
+            CAST(pm.{metric_name} AS DOUBLE) AS metric_value,
+            s.mu AS ensemble_mean,
+            s.sd AS ensemble_sd,
+            (
+                SELECT AVG(CASE WHEN d.metric_value <= CAST(pm.{metric_name} AS DOUBLE) THEN 1 ELSE 0 END)::DOUBLE
+                FROM dist d
+            ) AS ensemble_pctl
         FROM plan_metrics pm
-        JOIN plan p ON p.plan_id = pm.plan_id
-        WHERE p.plan_type = 'ENSEMBLE'
-    """).df()
+        CROSS JOIN stats s
+        WHERE pm.{metric_name} IS NOT NULL
+        """,
+        [metric_name, ensemble_id, ensemble_id, metric_name],
+    )
 
-    ref = con.execute("""
-        SELECT ensemble_id, opp_def_id, metric_name, mean, sd
-        FROM ensemble_distribution
-    """).df()
-
-    plans = con.execute(f"""
-        SELECT p.plan_id, p.ensemble_id, pm.opp_def_id, pm.{metric_name} AS plan_value
-        FROM plan p
-        JOIN plan_metrics pm ON pm.plan_id = p.plan_id
-    """).df()
-
-    if ens_vals.empty or ref.empty or plans.empty:
-        raise ValueError("Missing required inputs for plan_vs_ensemble.")
-
-    # Precompute sorted arrays
-    grouped_sorted = {}
-    for (ensemble_id, opp_def_id), g in ens_vals.groupby(["ensemble_id", "opp_def_id"]):
-        arr = np.sort(pd.to_numeric(g["value"], errors="coerce").dropna().to_numpy())
-        grouped_sorted[(ensemble_id, opp_def_id)] = arr
-
-    ref_map = {(r.ensemble_id, r.opp_def_id): (float(r.mean), float(r.sd)) for r in ref.itertuples(index=False)}
-
-    out_rows = []
-    for r in plans.itertuples(index=False):
-        key = (r.ensemble_id, r.opp_def_id)
-        arr = grouped_sorted.get(key)
-        if arr is None or len(arr) == 0:
-            continue
-
-        pv = float(r.plan_value)
-        right = np.searchsorted(arr, pv, side="right")
-        left = np.searchsorted(arr, pv, side="left")
-
-        percentile = 100.0 * right / len(arr)
-        tail_low = right / len(arr)
-        tail_high = 1.0 - (left / len(arr))
-
-        mean, sd = ref_map.get(key, (float(np.mean(arr)), float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0))
-        z = (pv - mean) / sd if sd > 0 else np.nan
-
-        out_rows.append({
-            "plan_id": r.plan_id,
-            "ensemble_id": r.ensemble_id,
-            "opp_def_id": r.opp_def_id,
-            "metric_name": metric_name,
-            "plan_value": pv,
-            "percentile": percentile,
-            "z_score": z,
-            "tail_prob_low": tail_low,
-            "tail_prob_high": tail_high,
-            "delta_from_mean": pv - mean,
-        })
-
-    out = pd.DataFrame(out_rows)
-    con.register("tmp_pve", out)
-    con.execute("INSERT INTO plan_vs_ensemble SELECT * FROM tmp_pve")
-    con.unregister("tmp_pve")
