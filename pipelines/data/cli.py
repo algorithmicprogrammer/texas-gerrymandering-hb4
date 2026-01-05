@@ -23,37 +23,55 @@ from .districts import pick_district_id_col
 # -----------------------------
 def out_paths(processed_dir: Path):
     return {
+        # tabular
         "geo_vtd": processed_dir / "geo_vtd.parquet",
         "elections": processed_dir / "elections.parquet",
         "returns_vtd": processed_dir / "election_returns_vtd.parquet",
         "plans": processed_dir / "plans.parquet",
         "plan_map": processed_dir / "plan_district_vtd.parquet",
+        # geospatial
+        "vtds_geo": processed_dir / "geospatial" / "vtds.parquet",
     }
 
 
-def build_elections_meta(processed_dir: Path, election_id: str, year: int, office: str, stage: str, notes: str = "") -> None:
-    df = pd.DataFrame([{
-        "election_id": election_id,
-        "year": int(year),
-        "office": office,
-        "stage": stage,
-        "notes": notes or None,
-    }])
+def build_elections_meta(
+    processed_dir: Path,
+    election_id: str,
+    year: int,
+    office: str,
+    stage: str,
+    notes: str = "",
+) -> None:
+    df = pd.DataFrame(
+        [
+            {
+                "election_id": election_id,
+                "year": int(year),
+                "office": office,
+                "stage": stage,
+                "notes": notes or None,
+            }
+        ]
+    )
     write_parquet(df, processed_dir / "elections.parquet")
 
 
 def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str, ensemble_id: str) -> None:
-    df = pd.DataFrame([{
-        "plan_id": plan_id,
-        "plan_type": "ENACTED",
-        "cycle": cycle,
-        "chamber": chamber,
-        "ensemble_id": ensemble_id,
-        "generator": "enacted",
-        "seed": None,
-        "constraints_json": None,
-        "created_at": None,
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "plan_id": plan_id,
+                "plan_type": "ENACTED",
+                "cycle": cycle,
+                "chamber": chamber,
+                "ensemble_id": ensemble_id,
+                "generator": "enacted",
+                "seed": None,
+                "constraints_json": None,
+                "created_at": None,
+            }
+        ]
+    )
     write_parquet(df, processed_dir / "plans.parquet")
 
 
@@ -68,11 +86,7 @@ def _construct_vtd_geoid_from_cntykey_vtdkey(vtds: "gpd.GeoDataFrame") -> pd.Ser
     vtdk = pd.to_numeric(vtds["vtdkey"], errors="coerce")
     if cnty.isna().any() or vtdk.isna().any():
         raise ValueError("Could not parse cntykey/vtdkey as numbers for vtd_geoid construction.")
-    return (
-        "48"
-        + cnty.astype("int64").astype(str).str.zfill(3)
-        + vtdk.astype("int64").astype(str).str.zfill(6)
-    )
+    return ("48" + cnty.astype("int64").astype(str).str.zfill(3) + vtdk.astype("int64").astype(str).str.zfill(6))
 
 
 def _infer_or_build_vtd_geoid(vtds: "gpd.GeoDataFrame") -> pd.Series:
@@ -157,21 +171,21 @@ def build_processed_inputs(
         joined[c] = pd.to_numeric(joined[c], errors="coerce")
 
     # Store votes as nullable integers to match DuckDB BIGINT schema
-    returns_vtd = pd.DataFrame({
-        "election_id": election_id,
-        "vtd_geoid": joined["vtd_geoid"].astype("string"),
-        "votes_total": joined["total_votes"].round().astype("Int64"),
-        "votes_dem": joined["dem_votes"].round().astype("Int64"),
-        "votes_rep": joined["rep_votes"].round().astype("Int64"),
-        "votes_other": joined["third_party_votes"].round().astype("Int64"),
-    })
+    returns_vtd = pd.DataFrame(
+        {
+            "election_id": election_id,
+            "vtd_geoid": joined["vtd_geoid"].astype("string"),
+            "votes_total": joined["total_votes"].round().astype("Int64"),
+            "votes_dem": joined["dem_votes"].round().astype("Int64"),
+            "votes_rep": joined["rep_votes"].round().astype("Int64"),
+            "votes_other": joined["third_party_votes"].round().astype("Int64"),
+        }
+    )
 
     returns_vtd["dem_share"] = pd.NA
     mask = returns_vtd["votes_total"].notna() & (returns_vtd["votes_total"] > 0)
-    # Cast to float for division, but keep result nullable
     returns_vtd.loc[mask, "dem_share"] = (
-        returns_vtd.loc[mask, "votes_dem"].astype("Float64")
-        / returns_vtd.loc[mask, "votes_total"].astype("Float64")
+        returns_vtd.loc[mask, "votes_dem"].astype("Float64") / returns_vtd.loc[mask, "votes_total"].astype("Float64")
     )
 
     write_parquet(returns_vtd, outs["returns_vtd"])
@@ -190,23 +204,32 @@ def build_processed_inputs(
     v = vtds.reset_index(drop=True).copy()  # has vtd_idx
 
     id_col = pick_district_id_col(d)
-    inter = gpd.overlay(v[["vtd_idx", "geometry"]], d[["district_idx", "geometry"]], how="intersection", keep_geom_type=True)
+    inter = gpd.overlay(
+        v[["vtd_idx", "geometry"]],
+        d[["district_idx", "geometry"]],
+        how="intersection",
+        keep_geom_type=True,
+    )
     if inter.empty:
         raise ValueError("VTD↔district overlay produced 0 intersections. Check CRS/geometry validity.")
     inter["inter_area"] = inter.geometry.area
     best = inter.sort_values("inter_area", ascending=False).drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
 
     if id_col is not None:
-        best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(columns={id_col: "district_id"})
+        best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(
+            columns={id_col: "district_id"}
+        )
     else:
         best["district_id"] = best["district_idx"] + 1
 
     v_assign = v.merge(best[["vtd_idx", "district_id"]], on="vtd_idx", how="left")
-    plan_map = pd.DataFrame({
-        "plan_id": plan_id,
-        "vtd_geoid": v_assign["vtd_geoid"].astype("string"),
-        "district_id": v_assign["district_id"].astype("string"),
-    })
+    plan_map = pd.DataFrame(
+        {
+            "plan_id": plan_id,
+            "vtd_geoid": v_assign["vtd_geoid"].astype("string"),
+            "district_id": v_assign["district_id"].astype("string"),
+        }
+    )
     write_parquet(plan_map, outs["plan_map"])
 
     # -----------------------------
@@ -223,8 +246,10 @@ def build_processed_inputs(
     total_col, race_map, _mode = pick_pop_columns(blocks2)
 
     if not race_map:
-        print("[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
-              "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap).")
+        print(
+            "[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
+            "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap)."
+        )
 
     blk = blocks2[["geoid20", "geometry"]].copy()
     attr_cols = [total_col] + list(race_map.values())
@@ -268,11 +293,37 @@ def build_processed_inputs(
         if col not in geo.columns:
             geo[col] = 0
 
-    known_cols = [c for c in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"] if c in geo.columns]
+    known_cols = [
+        c for c in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"] if c in geo.columns
+    ]
     geo["vap_other"] = (geo["vap_total"] - geo[known_cols].sum(axis=1)).clip(lower=0).astype("int64")
 
     geo["state_fips"] = "48"
     write_parquet(geo, outs["geo_vtd"])
+
+    # -----------------------------
+    # NEW: write geospatial VTDs keyed by vtd_geoid (geometry + pop columns)
+    # -----------------------------
+    vtds_geo_path = outs["vtds_geo"]
+    vtds_geo_path.parent.mkdir(parents=True, exist_ok=True)
+
+    vtds_geo = vtds[["vtd_geoid", "vtdkey", "geometry"]].copy()
+    vtds_geo = vtds_geo.merge(geo, on="vtd_geoid", how="left")
+
+    vtds_geo = gpd.GeoDataFrame(vtds_geo, geometry="geometry", crs=vtds.crs)
+
+    if "geometry" not in vtds_geo.columns:
+        raise RuntimeError("vtds_geo has no geometry column (unexpected).")
+    if vtds_geo.geometry.isna().any():
+        n_missing = int(vtds_geo.geometry.isna().sum())
+        raise RuntimeError(f"vtds_geo has {n_missing} missing geometries (unexpected).")
+    if vtds_geo["vap_total"].isna().any():
+        n_missing = int(vtds_geo["vap_total"].isna().sum())
+        raise ValueError(f"vtds_geo missing vap_total for {n_missing} rows after merge (unexpected).")
+
+    # IMPORTANT: write with geopandas so geo metadata is embedded
+    vtds_geo.to_parquet(vtds_geo_path, index=False)
+    print(f"[write] geospatial VTDs -> {vtds_geo_path.resolve()}")
 
     # -----------------------------
     # Metadata tables
@@ -286,12 +337,24 @@ def build_processed_inputs(
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Build processed inputs needed by the redistricting analysis pipeline (VTD+VAP, GEOID keys).")
+    ap = argparse.ArgumentParser(
+        description="Build processed inputs needed by the redistricting analysis pipeline (VTD+VAP, GEOID keys)."
+    )
     ap.add_argument("--districts", type=Path, required=True, help="District polygons (enacted plan).")
     ap.add_argument("--census", type=Path, required=True, help="Block geometries with geoid20 + demographics joins.")
     ap.add_argument("--vtds", type=Path, required=True, help="VTD polygons.")
-    ap.add_argument("--pl94", type=Path, required=True, help="Block-level attributes keyed by geoid20. Should include VAP if available.")
-    ap.add_argument("--elections", type=Path, required=True, help="Election returns (tall or wide). Prefer files with vtdkeyvalue.")
+    ap.add_argument(
+        "--pl94",
+        type=Path,
+        required=True,
+        help="Block-level attributes keyed by geoid20. Should include VAP if available.",
+    )
+    ap.add_argument(
+        "--elections",
+        type=Path,
+        required=True,
+        help="Election returns (tall or wide). Prefer files with vtdkeyvalue.",
+    )
     ap.add_argument("--out", type=Path, required=True, help="Output directory (data/processed).")
 
     ap.add_argument("--plan-id", default="ENACTED_TXCD_2021")
