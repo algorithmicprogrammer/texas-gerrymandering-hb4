@@ -219,19 +219,19 @@ python -m pipelines.ensembles.generate_recom_ensemble \
 8. Run redistricting pipeline against ensemble.
 * Command for Linux/MacOS:
 ```commandLine
-python -m pipelines.ensembles.generate_recom_ensemble \
-  --vtd-geo data/raw/vtds_24pg/VTDs_24PG.shp \
+python -m pipelines.redistricting.cli \
+  --stage all \
   --geo-vtd data/processed/geo_vtd.parquet \
-  --enacted-plan-map data/processed/plan_district_vtd.parquet \
+  --elections data/processed/elections.parquet \
+  --returns data/processed/election_returns_vtd.parquet \
+  --plans data/processed/plans.parquet \
+  --plan-map data/processed/plan_district_vtd.parquet \
+  --ensemble-plans data/processed/ensemble_plans.parquet \
+  --ensemble-plan-map data/processed/ensemble_plan_district_vtd.parquet \
   --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
-  --out-plans data/processed/ensemble_plans.parquet \
-  --pop-col vap_total \
-  --epsilon 0.01 \
-  --n-steps 5000 \
-  --burnin 500 \
-  --thin 10 \
-  --seed 20240101
+  --ei-election-id TX_SEN_2024_GEN \
+  --out-dir data/processed/redistricting_exports \
+  --export-format parquet
 ```
 
 ### Testing
