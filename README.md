@@ -203,8 +203,7 @@ python -m pipelines.data.cli \
 * Command for Linus/MacOS:
 ```commandline
 python -m pipelines.ensembles.generate_recom_ensemble \
-  --vtd-geo data/raw/vtds_24pg/VTDs_24PG.shp \
-  --geo-vtd data/processed/geo_vtd.parquet \
+  --vtds-geo data/processed/geospatial/vtds.parquet \
   --enacted-plan-map data/processed/plan_district_vtd.parquet \
   --ensemble-id ENS_TXCD_2024_recom_v1 \
   --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
