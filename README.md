@@ -291,9 +291,26 @@ pytest tests/
     │   ├── index.md   # readme for project
     │   ├── models.md   # readme for machine learning models
     │   └── references.md   # readme for references used
+├── pipelines    
+    │   ├── data
+    │   │   ├── __init__.py
+    │   │   ├── cli.py
+    │   │   ├── demographics.py
+    │   │   ├── districts.py
+    │   │   ├── elections.py
+    │   │   ├── io.py
+    │   │   └── keys.py
+    │   ├── ensembles
+    │   │   └── generate_recom_ensemble.py
+    │   └── redistricting
+    │   │   ├── __init__.py
+    │   │   ├── aggregates.py
+    │   │   ├── build_ensemble_plans.py
+    │   │   ├── cli.py
+    │   │   ├── config.py
+    │   │   ├── db.py
+    │   │   └── keys.py
 ├── pyproject.toml
-├── etl_pipeline.py
-├── references
 ├── reports
 │   └── figures
 ├── requirements.txt
