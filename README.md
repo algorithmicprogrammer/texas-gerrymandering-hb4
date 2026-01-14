@@ -1,3 +1,9 @@
+![GitHub Created At](https://img.shields.io/github/created-at/algorithmicprogrammer/texas-gerrymandering-hb4)
+![GitHub last commit](https://img.shields.io/github/last-commit/algorithmicprogrammer/texas-gerrymandering-hb4)
+![GitHub contributors](https://img.shields.io/github/contributors/algorithmicprogrammer/texas-gerrymandering-hb4)
+
+
+
 <!-- PROJECT LOGO -->
 <br />
 <div align="center">
