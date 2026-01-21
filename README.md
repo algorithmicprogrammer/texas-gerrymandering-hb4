@@ -153,20 +153,25 @@ git clone https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4.git
 cd texas-gerrymandering-hb4
 ```
 
-3. Create a Python virtual environment in MacOS/Linux.
+3. Create a Python virtual environment:
+
+* Command for MacOS/Linux:
 ```
 python3 -m venv venv
 ```
-Or create a virtual environment in Windows 11 Command Prompt.
+* Command for Windows 11 Command Prompt:
 ```commandline
 py -m venv venv
 ```
 
-4. Activate virtual environment in MacOS/Linux.
+4. Activate virtual environment.
+
+* Command for MacOS/Linux:
 ```
 source venv/bin/activate
 ```
-Or activate virtual environment in Windows 11 Command Prompt.
+
+* Command for Windows 11 Command Prompt:
 ```commandline
 venv\Scripts\activate.bat
 ```
