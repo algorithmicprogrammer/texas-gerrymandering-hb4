@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 
-NOTEBOOK_PATH = Path("code/models/linear_regression_classifier/01_preprocess.ipynb")
+NOTEBOOK_PATH = Path("notebooks/models/linear_regression_classifier/01_preprocess.ipynb")
 
 
 def load_preprocess_namespace():
@@ -13,7 +13,7 @@ def load_preprocess_namespace():
         nb = json.load(f)
     namespace = {}
     for cell in nb["cells"]:
-        if cell.get("cell_type") != "code":
+        if cell.get("cell_type") != "notebooks":
             continue
         source = "".join(cell.get("source", []))
         if "pd.read_csv" in source:
