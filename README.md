@@ -241,6 +241,22 @@ python -m pipelines.ensembles.generate_recom_ensemble \
   --seed 20240101
 ```
 
+* Command for Windows 11 Command Prompt:
+```commandline
+python -m pipelines.ensembles.generate_recom_ensemble ^
+  --vtds-geo data\processed\geospatial\vtds.parquet ^
+  --enacted-plan-map data\processed\plan_district_vtd.parquet ^
+  --ensemble-id ENS_TXCD_2024_recom_v1 ^
+  --out-plan-map data\processed\ensemble_plan_district_vtd.parquet ^
+  --out-plans data\processed\ensemble_plans.parquet ^
+  --pop-col vap_total ^
+  --epsilon 0.01 ^
+  --n-steps 5000 ^
+  --burnin 500 ^
+  --thin 10 ^
+  --seed 20240101
+```
+
 8. Run redistricting pipeline against ensemble.
 * Command for Linux/MacOS:
 ```commandLine
