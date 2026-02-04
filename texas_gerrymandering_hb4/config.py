@@ -40,8 +40,11 @@ GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
 VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
 VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
 
-CLEAN_ELECTION_RESULTS = INTERIM_DATA_DIR / "clean_vtd_election_results.csv"
-CLEAN_VTD_GEO = INTERIM_DATA_DIR / "vtds_geo_clean.parquet"
+ELECTION_RETURNS = PROCESSED_DATA_DIR / "election_returns_vtd.parquet"
+ELECTIONS = PROCESSED_DATA_DIR / "elections.parquet"
+GEO_VTD = PROCESSED_DATA_DIR / "geo_vtd.parquet"
+PLAN_DISTRICT_VTD = PROCESSED_DATA_DIR / "plan_district_vtd.parquet"
+PLANS = PROCESSED_DATA_DIR / "plans.parquet"
 
 TABULAR_DATA_DIR = PROCESSED_DATA_DIR / "tabular"
 FINAL_CSV = TABULAR_DATA_DIR / "districts_final.csv"
