@@ -88,6 +88,41 @@ def ensure_geoid20_str(df: pd.DataFrame, col: str = "geoid20") -> pd.DataFrame:
     )
 
 
+def pick_total_pop_column(df: pd.DataFrame) -> str:
+    """
+    Try to infer a block-level TOTAL population column (PL94 total pop).
+
+    Accepts common variants from PL94 and other ETL conventions.
+    Returns the *original* column name from df.
+
+    Raises ValueError if none found.
+    """
+    cols = {c.strip().lower(): c for c in df.columns}
+
+    # Common PL94 total population names in the wild:
+    candidates = [
+        "p001001",    # common short name
+        "p1_001n",    # Census PL94 table field
+        "p1_001",     # sometimes
+        "p0010001",   # occasional typo-ish variant
+        "total_pop",
+        "totpop",
+        "population",
+        "pop_total",
+        "totalpopulation",
+        "total",
+    ]
+
+    for key in candidates:
+        if key in cols:
+            return cols[key]
+
+    raise ValueError(
+        "Could not infer TOTAL population column in merged blocks table. "
+        "Expected something like P1_001N / P001001 / total_pop / totpop."
+    )
+
+
 def pick_pop_columns(df: pd.DataFrame):
     """
     Args:

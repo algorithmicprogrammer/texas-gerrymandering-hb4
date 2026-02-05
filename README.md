@@ -204,7 +204,7 @@ python -m pipelines.data.cli \
 ```
 
 * Command for Windows 11 Command Prompt:
-```
+```commandline
 python -m pipelines.data.cli ^
   --districts data/raw/PLANC2333/PLANC2333.shp ^
   --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
@@ -225,7 +225,7 @@ python -m pipelines.data.cli ^
 
 7. Run ensemble-generating pipeline.
 
-* Command for Linus/MacOS:
+* Command for Linux/MacOS:
 ```commandline
 python -m pipelines.ensembles.generate_recom_ensemble \
   --vtds-geo data/processed/geospatial/vtds.parquet \
@@ -249,7 +249,7 @@ python -m pipelines.ensembles.generate_recom_ensemble ^
   --ensemble-id ENS_TXCD_2024_recom_v1 ^
   --out-plan-map data\processed\ensemble_plan_district_vtd.parquet ^
   --out-plans data\processed\ensemble_plans.parquet ^
-  --pop-col vap_total ^
+  --pop-col total_pop ^
   --epsilon 0.01 ^
   --n-steps 5000 ^
   --burnin 500 ^

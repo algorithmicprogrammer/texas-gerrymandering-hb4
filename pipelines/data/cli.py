@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover
 
 from .io import mkdir_p, stdcols, read_any, ensure_crs, assert_projected_planar, write_parquet
 from .elections import clean_vtd_election_returns
-from .demographics import ensure_geoid20_str, unify_pl94_schema, pick_pop_columns
+from .demographics import ensure_geoid20_str, unify_pl94_schema, pick_pop_columns, pick_total_pop_column
 from .districts import pick_district_id_col
 
 
@@ -245,6 +245,8 @@ def build_processed_inputs(
 
     total_col, race_map, _mode = pick_pop_columns(blocks2)
 
+    total_pop_col = pick_total_pop_column(blocks2)
+
     if not race_map:
         print(
             "[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
@@ -252,7 +254,7 @@ def build_processed_inputs(
         )
 
     blk = blocks2[["geoid20", "geometry"]].copy()
-    attr_cols = [total_col] + list(race_map.values())
+    attr_cols = [total_pop_col, total_col] + list(race_map.values())
     attrs = blocks2[["geoid20"] + attr_cols].copy()
 
     if blk.crs is None:
@@ -283,6 +285,11 @@ def build_processed_inputs(
     agg = agg.apply(lambda s: np.rint(s).astype("int64"))
 
     geo = pd.DataFrame({"vtd_geoid": v["vtd_geoid"].astype("string")})
+
+    # TOTAL POP (new)
+    geo["total_pop"] = agg[total_pop_col].to_numpy()
+
+    # VAP (existing)
     geo["vap_total"] = agg[total_col].to_numpy()
 
     for out_name, src_col in race_map.items():
