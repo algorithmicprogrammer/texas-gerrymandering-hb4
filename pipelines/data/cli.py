@@ -1,3 +1,4 @@
+# data/cli.py
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -234,6 +235,10 @@ def build_processed_inputs(
 
     # -----------------------------
     # Demographics: blocks -> VTD (counts) => geo_vtd.parquet
+    #
+    # IMPORTANT:
+    #   - TOTAL POP uses centroid assignment (no area weights) to avoid double-counting when VTD polygons overlap.
+    #   - VAP (and race-VAP) keeps the existing area-weighted overlay.
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
     pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
@@ -243,8 +248,10 @@ def build_processed_inputs(
 
     blocks2 = blocks.merge(pl, on="geoid20", how="left")
 
+    # VAP schema (existing)
     total_col, race_map, _mode = pick_pop_columns(blocks2)
 
+    # TOTAL POP column (new)
     total_pop_col = pick_total_pop_column(blocks2)
 
     if not race_map:
@@ -253,9 +260,11 @@ def build_processed_inputs(
             "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap)."
         )
 
+    # Geometry + attributes
     blk = blocks2[["geoid20", "geometry"]].copy()
-    attr_cols = [total_pop_col, total_col] + list(race_map.values())
-    attrs = blocks2[["geoid20"] + attr_cols].copy()
+
+    vap_cols = [total_col] + list(race_map.values())
+    attrs = blocks2[["geoid20", total_pop_col] + vap_cols].copy()
 
     if blk.crs is None:
         raise ValueError("Blocks CRS is None; cannot overlay. Assign CRS first.")
@@ -266,11 +275,64 @@ def build_processed_inputs(
 
     assert_projected_planar(v, "VTDs")
 
+    # -----------------------------
+    # TOTAL POP (centroid-based block assignment) => exact sums, no double counting
+    # -----------------------------
+    blk_cent = blk.copy()
+    # light cleanup to reduce centroid failures on slightly invalid geometries
+    blk_cent["geometry"] = blk_cent.geometry.buffer(0)
+
+    v_clean = v[["vtd_idx", "geometry"]].copy()
+    v_clean["geometry"] = v_clean.geometry.buffer(0)
+
+    blk_cent["geometry"] = blk_cent.geometry.centroid
+
+    cent_join = gpd.sjoin(
+        blk_cent[["geoid20", "geometry"]],
+        v_clean,
+        predicate="within",
+        how="left",
+    )
+
+    cent_join = cent_join.merge(attrs[["geoid20", total_pop_col]], on="geoid20", how="left")
+    cent_join[total_pop_col] = pd.to_numeric(cent_join[total_pop_col], errors="coerce").fillna(0)
+
+    missing = int(cent_join["vtd_idx"].isna().sum())
+    if missing:
+        # Fallback: assign missing block centroids to nearest VTD (if available in this geopandas version)
+        try:
+            miss = cent_join.loc[cent_join["vtd_idx"].isna(), ["geoid20", "geometry"]].copy()
+            near = gpd.sjoin_nearest(
+                miss,
+                v_clean,
+                how="left",
+                distance_col="dist",
+            )[["geoid20", "vtd_idx"]]
+            cent_join = cent_join.drop(columns=["vtd_idx"])
+            cent_join = cent_join.merge(near, on="geoid20", how="left")
+            missing2 = int(cent_join["vtd_idx"].isna().sum())
+            if missing2:
+                raise ValueError(f"{missing2} block centroids could not be assigned to any VTD (even nearest).")
+        except Exception as e:
+            raise ValueError(
+                f"{missing} block centroids were not within any VTD, and nearest-join fallback failed. Error: {e}"
+            )
+
+    total_pop_by_vtd = (
+        cent_join.groupby("vtd_idx", observed=True)[total_pop_col]
+        .sum()
+        .reindex(v["vtd_idx"], fill_value=0)
+        .astype("int64")
+    )
+
+    # -----------------------------
+    # VAP (existing): area-weighted block -> VTD overlay
+    # -----------------------------
     inter2 = gpd.overlay(blk, v[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
     if inter2.empty:
         raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
 
-    inter2 = inter2.merge(attrs, on="geoid20", how="left")
+    inter2 = inter2.merge(attrs[["geoid20"] + vap_cols], on="geoid20", how="left")
 
     blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
     inter2["blk_area"] = blk_area.reindex(inter2["geoid20"]).values
@@ -278,22 +340,24 @@ def build_processed_inputs(
     inter2 = inter2.loc[inter2["blk_area"] > 0].copy()
     inter2["w"] = (inter2["inter_area"] / inter2["blk_area"]).clip(0, 1)
 
-    for c in attr_cols:
+    for c in vap_cols:
         inter2[c] = pd.to_numeric(inter2[c], errors="coerce").fillna(0) * inter2["w"]
 
-    agg = inter2.groupby("vtd_idx", observed=True)[attr_cols].sum().reindex(v["vtd_idx"], fill_value=0)
-    agg = agg.apply(lambda s: np.rint(s).astype("int64"))
+    agg_vap = inter2.groupby("vtd_idx", observed=True)[vap_cols].sum().reindex(v["vtd_idx"], fill_value=0)
+    agg_vap = agg_vap.apply(lambda s: np.rint(s).astype("int64"))
 
+    # -----------------------------
+    # Build geo_vtd output
+    # -----------------------------
     geo = pd.DataFrame({"vtd_geoid": v["vtd_geoid"].astype("string")})
 
     # TOTAL POP (new)
-    geo["total_pop"] = agg[total_pop_col].to_numpy()
+    geo["total_pop"] = total_pop_by_vtd.to_numpy()
 
     # VAP (existing)
-    geo["vap_total"] = agg[total_col].to_numpy()
-
+    geo["vap_total"] = agg_vap[total_col].to_numpy()
     for out_name, src_col in race_map.items():
-        geo[out_name] = agg[src_col].to_numpy()
+        geo[out_name] = agg_vap[src_col].to_numpy()
 
     # Ensure all expected race columns exist for downstream (including nh_native)
     for col in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]:
@@ -324,6 +388,9 @@ def build_processed_inputs(
     if vtds_geo.geometry.isna().any():
         n_missing = int(vtds_geo.geometry.isna().sum())
         raise RuntimeError(f"vtds_geo has {n_missing} missing geometries (unexpected).")
+    if vtds_geo["total_pop"].isna().any():
+        n_missing = int(vtds_geo["total_pop"].isna().sum())
+        raise ValueError(f"vtds_geo missing total_pop for {n_missing} rows after merge (unexpected).")
     if vtds_geo["vap_total"].isna().any():
         n_missing = int(vtds_geo["vap_total"].isna().sum())
         raise ValueError(f"vtds_geo missing vap_total for {n_missing} rows after merge (unexpected).")
@@ -403,3 +470,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
