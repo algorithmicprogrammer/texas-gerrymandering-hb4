@@ -1,4 +1,4 @@
-# data/cli.py
+# pipelines/data/cli.py
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -15,7 +15,12 @@ except Exception:  # pragma: no cover
 
 from .io import mkdir_p, stdcols, read_any, ensure_crs, assert_projected_planar, write_parquet
 from .elections import clean_vtd_election_returns
-from .demographics import ensure_geoid20_str, unify_pl94_schema, pick_pop_columns, pick_total_pop_column
+from .demographics import (
+    ensure_geoid20_str,
+    unify_pl94_schema,
+    pick_pop_columns,
+    pick_total_pop_column,
+)
 from .districts import pick_district_id_col
 
 
@@ -77,7 +82,7 @@ def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str
 
 
 def _construct_vtd_geoid_from_cntykey_vtdkey(vtds: "gpd.GeoDataFrame") -> pd.Series:
-    """Construct a project-stable VTD GEOID from CNTYKEY/VTDKEY."""
+    """Construct a stable VTD GEOID from CNTYKEY/VTDKEY (Texas-specific)."""
     if "cntykey" not in vtds.columns or "vtdkey" not in vtds.columns:
         raise ValueError(
             "VTD shapefile is missing cntykey/vtdkey needed to construct vtd_geoid. "
@@ -159,16 +164,14 @@ def build_processed_inputs(
     elect_wide["vtdkey"] = pd.to_numeric(elect_wide["vtdkey"], errors="coerce").astype("Int64")
 
     # Aggregate duplicates
-    elect_wide = (
-        elect_wide.groupby("vtdkey", as_index=False)[["dem_votes", "rep_votes", "third_party_votes", "total_votes"]]
-        .sum()
-    )
+    vote_cols = ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
+    elect_wide = elect_wide.groupby("vtdkey", as_index=False)[vote_cols].sum()
 
     # Join elections to VTD universe
     joined = vtds[["vtd_geoid", "vtdkey"]].merge(elect_wide, on="vtdkey", how="left")
 
     # Preserve missingness (do NOT fill NAs with 0)
-    for c in ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]:
+    for c in vote_cols:
         joined[c] = pd.to_numeric(joined[c], errors="coerce")
 
     # Store votes as nullable integers to match DuckDB BIGINT schema
@@ -193,33 +196,50 @@ def build_processed_inputs(
 
     # -----------------------------
     # District assignment: plan_district_vtd (enacted)
+    # FIX: centroid-within + nearest fallback (robust to overlaps/slivers)
     # -----------------------------
-    districts = districts.copy()
-    vtds = vtds.copy()
-
     assert_projected_planar(districts, "districts")
     assert_projected_planar(vtds, "vtds")
 
     d = districts.reset_index(drop=True).copy()
     d["district_idx"] = np.arange(len(d))
-    v = vtds.reset_index(drop=True).copy()  # has vtd_idx
 
+    v = vtds.reset_index(drop=True).copy()  # already has vtd_idx
     id_col = pick_district_id_col(d)
-    inter = gpd.overlay(
-        v[["vtd_idx", "geometry"]],
-        d[["district_idx", "geometry"]],
-        how="intersection",
-        keep_geom_type=True,
-    )
-    if inter.empty:
-        raise ValueError("VTD↔district overlay produced 0 intersections. Check CRS/geometry validity.")
-    inter["inter_area"] = inter.geometry.area
-    best = inter.sort_values("inter_area", ascending=False).drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
+
+    d_clean = d[["district_idx", "geometry"]].copy()
+    d_clean["geometry"] = d_clean.geometry.buffer(0)
+
+    v_cent = v[["vtd_idx", "geometry"]].copy()
+    v_cent["geometry"] = v_cent.geometry.buffer(0).centroid
+
+    j = gpd.sjoin(v_cent, d_clean, predicate="within", how="left")[["vtd_idx", "district_idx"]]
+
+    missing = int(j["district_idx"].isna().sum())
+    if missing:
+        try:
+            miss_mask = j["district_idx"].isna()
+            miss = v_cent.loc[miss_mask, ["vtd_idx", "geometry"]].copy()
+
+            near = gpd.sjoin_nearest(miss, d_clean, how="left", distance_col="dist")[["vtd_idx", "district_idx"]]
+            near_map = near.dropna(subset=["district_idx"]).set_index("vtd_idx")["district_idx"]
+
+            j.loc[miss_mask, "district_idx"] = j.loc[miss_mask, "vtd_idx"].map(near_map)
+
+            missing2 = int(j["district_idx"].isna().sum())
+            if missing2:
+                examples = j.loc[j["district_idx"].isna(), "vtd_idx"].head(10).tolist()
+                raise ValueError(
+                    f"{missing2} VTD centroids could not be assigned to any district (even nearest). "
+                    f"Examples vtd_idx: {examples}"
+                )
+        except Exception as e:
+            raise ValueError(f"{missing} VTD centroids not within any district and nearest fallback failed: {e}")
+
+    best = j.drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
 
     if id_col is not None:
-        best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(
-            columns={id_col: "district_id"}
-        )
+        best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(columns={id_col: "district_id"})
     else:
         best["district_id"] = best["district_idx"] + 1
 
@@ -254,12 +274,6 @@ def build_processed_inputs(
     # TOTAL POP column (new)
     total_pop_col = pick_total_pop_column(blocks2)
 
-    if not race_map:
-        print(
-            "[WARN] No race VAP columns inferred; geo_vtd will include only vap_total. "
-            "Check your PL file columns (expected anglovap/blackvap/hispvap/asianvap)."
-        )
-
     # Geometry + attributes
     blk = blocks2[["geoid20", "geometry"]].copy()
 
@@ -268,24 +282,22 @@ def build_processed_inputs(
 
     if blk.crs is None:
         raise ValueError("Blocks CRS is None; cannot overlay. Assign CRS first.")
-    if v.crs is None:
+    if vtds.crs is None:
         raise ValueError("VTD CRS is None; cannot overlay. Assign CRS first.")
-    if blk.crs != v.crs:
-        blk = blk.to_crs(v.crs)
+    if blk.crs != vtds.crs:
+        blk = blk.to_crs(vtds.crs)
 
-    assert_projected_planar(v, "VTDs")
+    assert_projected_planar(vtds, "VTDs")
 
     # -----------------------------
-    # TOTAL POP (centroid-based block assignment) => exact sums, no double counting
+    # TOTAL POP: centroid-based block -> VTD assignment
+    # FIX: fill missing rows only (do NOT drop vtd_idx for everyone)
     # -----------------------------
-    blk_cent = blk.copy()
-    # light cleanup to reduce centroid failures on slightly invalid geometries
-    blk_cent["geometry"] = blk_cent.geometry.buffer(0)
-
-    v_clean = v[["vtd_idx", "geometry"]].copy()
+    v_clean = vtds[["vtd_idx", "geometry"]].copy()
     v_clean["geometry"] = v_clean.geometry.buffer(0)
 
-    blk_cent["geometry"] = blk_cent.geometry.centroid
+    blk_cent = blk.copy()
+    blk_cent["geometry"] = blk_cent.geometry.buffer(0).centroid
 
     cent_join = gpd.sjoin(
         blk_cent[["geoid20", "geometry"]],
@@ -299,20 +311,22 @@ def build_processed_inputs(
 
     missing = int(cent_join["vtd_idx"].isna().sum())
     if missing:
-        # Fallback: assign missing block centroids to nearest VTD (if available in this geopandas version)
         try:
-            miss = cent_join.loc[cent_join["vtd_idx"].isna(), ["geoid20", "geometry"]].copy()
-            near = gpd.sjoin_nearest(
-                miss,
-                v_clean,
-                how="left",
-                distance_col="dist",
-            )[["geoid20", "vtd_idx"]]
-            cent_join = cent_join.drop(columns=["vtd_idx"])
-            cent_join = cent_join.merge(near, on="geoid20", how="left")
+            miss_mask = cent_join["vtd_idx"].isna()
+            miss = cent_join.loc[miss_mask, ["geoid20", "geometry"]].copy()
+
+            near = gpd.sjoin_nearest(miss, v_clean, how="left", distance_col="dist")[["geoid20", "vtd_idx"]]
+            near_map = near.dropna(subset=["vtd_idx"]).set_index("geoid20")["vtd_idx"]
+
+            cent_join.loc[miss_mask, "vtd_idx"] = cent_join.loc[miss_mask, "geoid20"].map(near_map)
+
             missing2 = int(cent_join["vtd_idx"].isna().sum())
             if missing2:
-                raise ValueError(f"{missing2} block centroids could not be assigned to any VTD (even nearest).")
+                examples = cent_join.loc[cent_join["vtd_idx"].isna(), "geoid20"].head(10).tolist()
+                raise ValueError(
+                    f"{missing2} block centroids could not be assigned to any VTD (even nearest). "
+                    f"Examples geoid20: {examples}"
+                )
         except Exception as e:
             raise ValueError(
                 f"{missing} block centroids were not within any VTD, and nearest-join fallback failed. Error: {e}"
@@ -321,14 +335,14 @@ def build_processed_inputs(
     total_pop_by_vtd = (
         cent_join.groupby("vtd_idx", observed=True)[total_pop_col]
         .sum()
-        .reindex(v["vtd_idx"], fill_value=0)
+        .reindex(vtds["vtd_idx"], fill_value=0)
         .astype("int64")
     )
 
     # -----------------------------
-    # VAP (existing): area-weighted block -> VTD overlay
+    # VAP: area-weighted block -> VTD overlay
     # -----------------------------
-    inter2 = gpd.overlay(blk, v[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
+    inter2 = gpd.overlay(blk, vtds[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
     if inter2.empty:
         raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
 
@@ -343,13 +357,13 @@ def build_processed_inputs(
     for c in vap_cols:
         inter2[c] = pd.to_numeric(inter2[c], errors="coerce").fillna(0) * inter2["w"]
 
-    agg_vap = inter2.groupby("vtd_idx", observed=True)[vap_cols].sum().reindex(v["vtd_idx"], fill_value=0)
+    agg_vap = inter2.groupby("vtd_idx", observed=True)[vap_cols].sum().reindex(vtds["vtd_idx"], fill_value=0)
     agg_vap = agg_vap.apply(lambda s: np.rint(s).astype("int64"))
 
     # -----------------------------
     # Build geo_vtd output
     # -----------------------------
-    geo = pd.DataFrame({"vtd_geoid": v["vtd_geoid"].astype("string")})
+    geo = pd.DataFrame({"vtd_geoid": vtds["vtd_geoid"].astype("string")})
 
     # TOTAL POP (new)
     geo["total_pop"] = total_pop_by_vtd.to_numpy()
@@ -373,18 +387,15 @@ def build_processed_inputs(
     write_parquet(geo, outs["geo_vtd"])
 
     # -----------------------------
-    # NEW: write geospatial VTDs keyed by vtd_geoid (geometry + pop columns)
+    # Write geospatial VTDs keyed by vtd_geoid (geometry + pop columns)
     # -----------------------------
     vtds_geo_path = outs["vtds_geo"]
     vtds_geo_path.parent.mkdir(parents=True, exist_ok=True)
 
     vtds_geo = vtds[["vtd_geoid", "vtdkey", "geometry"]].copy()
     vtds_geo = vtds_geo.merge(geo, on="vtd_geoid", how="left")
-
     vtds_geo = gpd.GeoDataFrame(vtds_geo, geometry="geometry", crs=vtds.crs)
 
-    if "geometry" not in vtds_geo.columns:
-        raise RuntimeError("vtds_geo has no geometry column (unexpected).")
     if vtds_geo.geometry.isna().any():
         n_missing = int(vtds_geo.geometry.isna().sum())
         raise RuntimeError(f"vtds_geo has {n_missing} missing geometries (unexpected).")
@@ -395,7 +406,6 @@ def build_processed_inputs(
         n_missing = int(vtds_geo["vap_total"].isna().sum())
         raise ValueError(f"vtds_geo missing vap_total for {n_missing} rows after merge (unexpected).")
 
-    # IMPORTANT: write with geopandas so geo metadata is embedded
     vtds_geo.to_parquet(vtds_geo_path, index=False)
     print(f"[write] geospatial VTDs -> {vtds_geo_path.resolve()}")
 
@@ -412,16 +422,16 @@ def build_processed_inputs(
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Build processed inputs needed by the redistricting analysis pipeline (VTD+VAP, GEOID keys)."
+        description="Build processed inputs needed by the redistricting analysis pipeline (VTD+demographics, GEOID keys)."
     )
     ap.add_argument("--districts", type=Path, required=True, help="District polygons (enacted plan).")
-    ap.add_argument("--census", type=Path, required=True, help="Block geometries with geoid20 + demographics joins.")
+    ap.add_argument("--census", type=Path, required=True, help="Block geometries (needs geoid20).")
     ap.add_argument("--vtds", type=Path, required=True, help="VTD polygons.")
     ap.add_argument(
         "--pl94",
         type=Path,
         required=True,
-        help="Block-level attributes keyed by geoid20. Should include VAP if available.",
+        help="Block-level attributes keyed by geoid20 (should include PL94 total pop and VAP columns if available).",
     )
     ap.add_argument(
         "--elections",
