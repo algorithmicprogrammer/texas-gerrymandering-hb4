@@ -1,3 +1,4 @@
+# redistricting/cli.py
 from __future__ import annotations
 
 import argparse
@@ -44,6 +45,14 @@ def main() -> None:
     p.add_argument("--ei-election-id", help="Election_id for EI fit, e.g. TX_SEN_2024_GEN")
     p.add_argument("--ei-run-id", default="EI_RUN_001")
 
+    # EI sampler controls
+    p.add_argument("--ei-draws", type=int, default=2000)
+    p.add_argument("--ei-tune", type=int, default=3000)
+    p.add_argument("--ei-chains", type=int, default=4)
+    p.add_argument("--ei-target-accept", type=float, default=0.97)
+    p.add_argument("--ei-max-treedepth", type=int, default=15)
+    p.add_argument("--ei-seed", type=int, default=None)
+
     # Export options
     p.add_argument("--out-dir", help="If provided, export derived tables to this directory.")
     p.add_argument("--export-format", default="parquet", choices=["parquet", "csv"])
@@ -64,19 +73,16 @@ def main() -> None:
         load_election(con, args.elections)
         load_election_returns_vtd(con, args.returns)
 
-        # enacted
         load_plan(con, args.plans)
         load_plan_district_vtd(con, args.plan_map)
 
-        # ensemble (optional)
-        if args.ensemble_plans:
+        # ensemble data is optional for some stages
+        if args.ensemble_plans and args.ensemble_plan_map:
             load_plan(con, args.ensemble_plans)
-        if args.ensemble_plan_map:
             load_plan_district_vtd(con, args.ensemble_plan_map)
 
     def run_sanity():
         sanity_checks(con)
-        print("Sanity checks passed.")
 
     def run_aggregates():
         build_district_demo_vap(con)
@@ -90,16 +96,16 @@ def main() -> None:
         if not args.ensemble_id:
             raise ValueError("For stage=ensemble, provide --ensemble-id")
 
-        # IMPORTANT: pass ensemble_id explicitly
+        # Build ensemble distribution + enacted comparison for BOTH metrics in plan_metrics
         build_ensemble_distribution(
             con,
             ensemble_id=args.ensemble_id,
-            metric_column="n_opportunity_districts",
+            metric_columns=["n_opportunity_districts", "mean_minority_share"],
         )
         build_plan_vs_ensemble(
             con,
             ensemble_id=args.ensemble_id,
-            metric_column="n_opportunity_districts",
+            metric_columns=["n_opportunity_districts", "mean_minority_share"],
         )
 
     def run_ei():
@@ -112,43 +118,35 @@ def main() -> None:
             election_id=args.ei_election_id,
             ei_run_id=args.ei_run_id,
             ensemble_id=args.ensemble_id,
+            draws=args.ei_draws,
+            tune=args.ei_tune,
+            chains=args.ei_chains,
+            target_accept=args.ei_target_accept,
+            max_treedepth=args.ei_max_treedepth,
+            random_seed=args.ei_seed,
         )
 
     def run_export():
-        if not args.out_dir:
-            raise ValueError("For stage=export, provide --out-dir (and optional --export-format).")
-        export_outputs(con, args.out_dir, fmt=args.export_format)
-
-    # Execute
-    if args.stage == "schema":
-        run_schema()
-    elif args.stage == "load":
-        run_schema()
-        run_load()
-    elif args.stage == "sanity":
-        run_sanity()
-    elif args.stage == "aggregates":
-        run_aggregates()
-    elif args.stage == "metrics":
-        run_metrics()
-    elif args.stage == "ensemble":
-        run_ensemble()
-    elif args.stage == "ei":
-        run_ei()
-    elif args.stage == "export":
-        run_export()
-    elif args.stage == "all":
-        run_schema()
-        run_load()
-        run_sanity()
-        run_aggregates()
-        run_metrics()
-        run_ensemble()
-        run_ei()
         if args.out_dir:
-            run_export()
+            export_outputs(con, args.out_dir, fmt=args.export_format)
 
-    con.close()
+    if args.stage in ("schema", "all"):
+        run_schema()
+    if args.stage in ("load", "all"):
+        run_load()
+    if args.stage in ("sanity", "all"):
+        run_sanity()
+    if args.stage in ("aggregates", "all"):
+        run_aggregates()
+    if args.stage in ("metrics", "all"):
+        run_metrics()
+    if args.stage in ("ensemble", "all"):
+        run_ensemble()
+    if args.stage in ("ei", "all"):
+        run_ei()
+    if args.stage in ("export", "all"):
+        run_export()
+
     print(f"Done. stage={args.stage}")
 
 
