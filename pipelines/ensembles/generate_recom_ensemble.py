@@ -1,23 +1,32 @@
+# pipelines/ensembles/generate_recom_ensemble.py
+# Updated to add ReCom failure-resilience via:
+#   - node_repeats (spanning-tree retries)
+#   - bounded bipartition_tree max_attempts per try
+#   - reselection loop (retry proposal on RuntimeError)
+#
+# Based on your current file. :contentReference[oaicite:0]{index=0}
+
 from __future__ import annotations
 
 import argparse
 import json
+import random
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
-import geopandas as gpd
-
+import pyarrow as pa
+import pyarrow.parquet as pq
 from gerrychain import GeographicPartition, Graph, MarkovChain
 from gerrychain.accept import always_accept
 from gerrychain.constraints import within_percent_of_ideal_population
 from gerrychain.proposals import recom
+from gerrychain.tree import bipartition_tree
 from gerrychain.updaters import Tally, cut_edges
-
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 
 @dataclass
@@ -41,6 +50,11 @@ class RunConfig:
 
     flush_every_plans: int
     ignore_geometry_errors: bool
+
+    # NEW: proposal robustness knobs
+    node_repeats: int
+    reselect_tries: int
+    bipartition_max_attempts: int
 
 
 def _read_enacted_map(path: Path, vtd_col: str, dist_col: str) -> pd.DataFrame:
@@ -125,7 +139,10 @@ def _repair_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 def generate_recom_ensemble(cfg: RunConfig) -> None:
     _ensure_outputs(cfg)
+
+    # Reproducibility for both numpy and Python's random (gerrychain uses random internally)
     np.random.seed(cfg.seed)
+    random.seed(cfg.seed)
 
     # Read geospatial VTDs (must include geometry + vtd_geoid + pop_col)
     gdf = gpd.read_parquet(cfg.vtds_geo)
@@ -196,17 +213,34 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
     pop_constraint = within_percent_of_ideal_population(init_part, eps)
 
     # -----------------------------
-    # IMPORTANT FIX:
-    # Your gerrychain version's recom expects (partition, ...) as first arg,
-    # so proposal must be a function(partition)->new_partition.
+    # NEW: ReCom resilience
+    # - Use a bounded bipartition_tree per try (bipartition_max_attempts)
+    # - Retry proposal up to reselect_tries on RuntimeError
+    # - Increase node_repeats to improve success probability
     # -----------------------------
+    method = partial(bipartition_tree, max_attempts=int(cfg.bipartition_max_attempts))
+
     def proposal(partition):
-        return recom(
-            partition,
-            pop_col=cfg.pop_col,
-            pop_target=ideal,
-            epsilon=eps,
-            node_repeats=1,
+        last_err: Exception | None = None
+        for _ in range(int(cfg.reselect_tries)):
+            try:
+                return recom(
+                    partition,
+                    pop_col=cfg.pop_col,
+                    pop_target=ideal,
+                    epsilon=eps,
+                    node_repeats=int(cfg.node_repeats),
+                    method=method,
+                )
+            except RuntimeError as e:
+                # Typical failure: "Could not find a possible cut after X attempts."
+                last_err = e
+                continue
+
+        raise RuntimeError(
+            f"ReCom failed after {cfg.reselect_tries} reselection tries "
+            f"(node_repeats={cfg.node_repeats}, bipartition_max_attempts={cfg.bipartition_max_attempts}). "
+            f"Last error: {last_err}"
         )
 
     chain = MarkovChain(
@@ -263,6 +297,10 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
                         "thin": int(cfg.thin),
                         "n_steps": int(cfg.n_steps),
                         "pop_col": cfg.pop_col,
+                        # NEW provenance for proposal robustness
+                        "node_repeats": int(cfg.node_repeats),
+                        "reselect_tries": int(cfg.reselect_tries),
+                        "bipartition_max_attempts": int(cfg.bipartition_max_attempts),
                     }
                 ),
                 created_at=None,
@@ -312,6 +350,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="If set, build graph with ignore_errors=True (last resort).",
     )
 
+    # NEW: ReCom robustness knobs
+    ap.add_argument(
+        "--node-repeats",
+        type=int,
+        default=20,
+        help="ReCom node_repeats (higher increases chance of finding valid splits).",
+    )
+    ap.add_argument(
+        "--reselect-tries",
+        type=int,
+        default=50,
+        help="How many times to retry (reselect) if ReCom fails with RuntimeError.",
+    )
+    ap.add_argument(
+        "--bipartition-max-attempts",
+        type=int,
+        default=2000,
+        help="Max attempts inside bipartition_tree per try (lower + reselection is faster than 100k on a doomed pair).",
+    )
+
     return ap
 
 
@@ -335,6 +393,10 @@ def main() -> None:
         enacted_dist_col=args.enacted_dist_col,
         flush_every_plans=args.flush_every_plans,
         ignore_geometry_errors=args.ignore_geometry_errors,
+        # NEW
+        node_repeats=args.node_repeats,
+        reselect_tries=args.reselect_tries,
+        bipartition_max_attempts=args.bipartition_max_attempts,
     )
 
     generate_recom_ensemble(cfg)
