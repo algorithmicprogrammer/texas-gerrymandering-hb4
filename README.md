@@ -233,7 +233,7 @@ python -m pipelines.ensembles.generate_recom_ensemble \
   --ensemble-id ENS_TXCD_2024_recom_v1 \
   --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
   --out-plans data/processed/ensemble_plans.parquet \
-  --pop-col vap_total \
+  --pop-col total_pop \
   --epsilon 0.01 \
   --n-steps 5000 \
   --burnin 500 \
