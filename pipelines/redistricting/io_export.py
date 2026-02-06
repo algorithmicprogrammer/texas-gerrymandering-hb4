@@ -1,3 +1,4 @@
+# redistricting/io_export.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,6 +35,7 @@ def export_outputs(con: duckdb.DuckDBPyConnection, out_dir: str, fmt: str = "par
         "district_opportunity",
         "plan_metrics",
         "ensemble_distribution",
+        "ensemble_distribution_draws",  # <-- added
         "plan_vs_ensemble",
         "ei_run",
         "ei_posterior_group",
@@ -70,3 +72,4 @@ def export_outputs(con: duckdb.DuckDBPyConnection, out_dir: str, fmt: str = "par
 
     if not wrote_any:
         print("[export] No output tables were exported (tables missing or empty).")
+
