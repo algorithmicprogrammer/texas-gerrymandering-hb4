@@ -1,3 +1,4 @@
+# redistricting/ei/model.py
 from __future__ import annotations
 
 import json
@@ -14,18 +15,22 @@ def fit_hierarchical_ei_vtd(
     election_id: str,
     ei_run_id: str,
     ensemble_id: str,
-    draws: int = 1500,
-    tune: int = 1500,
+    draws: int = 2000,
+    tune: int = 3000,
     chains: int = 4,
-    target_accept: float = 0.9,
+    target_accept: float = 0.97,
+    max_treedepth: int = 15,
+    random_seed: int | None = None,
 ) -> None:
     """
-    Minimal hierarchical EI on VTDs, then project to district compositions across all plans in ensemble_id.
+    Hierarchical EI on VTDs (race VAP shares -> Dem support), then project to district compositions across all plans.
 
-    Fixes included:
-      - Safe row-normalization of X using np.divide(where=...) to avoid NaN/Inf
-      - Filters out invalid rows (votes_total<=0, vap_total<=0, y<0, y>n, non-finite X)
-      - Clips p away from exactly 0/1 to avoid numerical issues when p becomes 0/1 due to rounding
+    Improvements vs prior version:
+      - Non-centered parameterization to reduce hierarchical funnel divergences:
+            z ~ Normal(0,1)
+            theta = mu + sigma * z
+      - More conservative NUTS defaults: higher target_accept, longer tune, max_treedepth
+      - Stores basic sampling diagnostics in ei_run.model_spec_json
     """
     try:
         import pymc as pm
@@ -93,7 +98,7 @@ def fit_hierarchical_ei_vtd(
 
     X = df[[group_map[g] for g in groups]].to_numpy(dtype=float)
 
-    # Safe normalization: avoid np.where(X/rs) NaNs when rs==0
+    # Safe normalization: avoid NaNs when row-sum==0
     rs = X.sum(axis=1, keepdims=True)
     X = np.divide(X, rs, out=np.zeros_like(X), where=(rs > 0))
 
@@ -111,7 +116,6 @@ def fit_hierarchical_ei_vtd(
     if len(y) == 0:
         raise ValueError("EI: no valid observations remain after cleaning X/y/n.")
 
-    # Additional guard: y must be <= n
     bad = np.where((y < 0) | (y > n))[0]
     if len(bad) > 0:
         raise ValueError(
@@ -123,9 +127,12 @@ def fit_hierarchical_ei_vtd(
     p_eps = 1e-6
 
     with pm.Model() as model:
+        # Hierarchical priors (non-centered)
         mu = pm.Normal("mu", mu=0.0, sigma=1.5, shape=len(groups))
         sigma = pm.HalfNormal("sigma", sigma=1.0, shape=len(groups))
-        theta = pm.Normal("theta", mu=mu, sigma=sigma, shape=len(groups))
+
+        z = pm.Normal("z", mu=0.0, sigma=1.0, shape=len(groups))
+        theta = pm.Deterministic("theta", mu + sigma * z)
 
         support = pm.Deterministic("support", pm.math.sigmoid(theta))
 
@@ -139,22 +146,60 @@ def fit_hierarchical_ei_vtd(
             tune=tune,
             chains=chains,
             target_accept=target_accept,
+            init="jitter+adapt_diag",
+            max_treedepth=max_treedepth,
+            random_seed=random_seed,
             progressbar=True,
         )
 
-    # extract draws: (samples, groups)
+    # Extract draws: (samples, groups)
     support_draws = idata.posterior["support"].stack(sample=("chain", "draw")).values
     if support_draws.shape[0] == len(groups):
         support_draws = support_draws.T
 
+    # Diagnostics (best-effort; do not hard fail if unavailable)
+    diag = {}
+    try:
+        diverging = idata.sample_stats["diverging"].stack(sample=("chain", "draw")).values
+        diag["divergences"] = int(np.sum(diverging))
+    except Exception:
+        diag["divergences"] = None
+
+    try:
+        import arviz as az
+
+        summ = az.summary(idata, var_names=["mu", "sigma", "support"], round_to=None)
+        # Some installs label ESS columns differently
+        rhat = summ["r_hat"].to_numpy() if "r_hat" in summ.columns else None
+        ess = None
+        if "ess_bulk" in summ.columns:
+            ess = summ["ess_bulk"].to_numpy()
+        elif "ess_mean" in summ.columns:
+            ess = summ["ess_mean"].to_numpy()
+
+        diag["max_rhat"] = float(np.nanmax(rhat)) if rhat is not None else None
+        diag["min_ess_bulk"] = float(np.nanmin(ess)) if ess is not None else None
+    except Exception:
+        diag["max_rhat"] = None
+        diag["min_ess_bulk"] = None
+
     spec = {
-        "model": "minimal_hierarchical_ei_vtd",
+        "model": "hierarchical_ei_vtd_noncentered",
         "election_id": election_id,
         "groups": groups,
-        "priors": {"mu": "Normal(0,1.5)", "sigma": "HalfNormal(1.0)"},
+        "priors": {"mu": "Normal(0,1.5)", "sigma": "HalfNormal(1.0)", "z": "Normal(0,1)"},
         "notes": "Fit on VTDs; projected to plan districts via district composition.",
         "n_obs": int(len(df)),
         "p_clip_eps": p_eps,
+        "sampler": {
+            "draws": int(draws),
+            "tune": int(tune),
+            "chains": int(chains),
+            "target_accept": float(target_accept),
+            "max_treedepth": int(max_treedepth),
+            "random_seed": random_seed,
+        },
+        "diagnostics": diag,
     }
 
     con.execute(
@@ -165,8 +210,7 @@ def fit_hierarchical_ei_vtd(
         [ei_run_id, ensemble_id, election_id, json.dumps(spec)],
     )
 
-
-    # store group summaries
+    # Store group summaries
     rows = []
     for gi, gname in enumerate(groups):
         s = support_draws[:, gi]
@@ -187,7 +231,7 @@ def fit_hierarchical_ei_vtd(
     con.execute("INSERT OR REPLACE INTO ei_posterior_group SELECT * FROM tmp_ei_group")
     con.unregister("tmp_ei_group")
 
-    # project to every plan in ensemble_id
+    # Project to every plan in ensemble_id
     project_ei_to_districts(
         con=con,
         ei_run_id=ei_run_id,
@@ -195,3 +239,4 @@ def fit_hierarchical_ei_vtd(
         groups=groups,
         support_draws=support_draws,
     )
+
