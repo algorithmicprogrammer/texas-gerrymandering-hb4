@@ -271,8 +271,16 @@ python -m pipelines.redistricting.cli \
   --ensemble-plan-map data/processed/ensemble_plan_district_vtd.parquet \
   --ensemble-id ENS_TXCD_2024_recom_v1 \
   --ei-election-id TX_SEN_2024_GEN \
+  --ei-run-id EI_RUN_002 \
+  --ei-draws 2000 \
+  --ei-tune 3000 \
+  --ei-chains 4 \
+  --ei-target-accept 0.99 \
+  --ei-max-treedepth 15 \
+  --ei-seed 20240101 \
   --out-dir data/processed/redistricting_exports \
   --export-format parquet
+
 ```
 
 ### Testing
