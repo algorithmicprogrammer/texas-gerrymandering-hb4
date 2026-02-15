@@ -40,67 +40,123 @@ def out_paths(processed_dir: Path):
     }
 
 
+# -----------------------------
+# CVAP Special Tabulation helpers (ACS 5-year)
+# -----------------------------
+def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataFrame:
+    """Load Census Bureau CVAP Special Tabulation (Block Group) file and return wide CVAP estimates.
+
+    The CVAP special tabulation is delivered in *long* format with one row per
+    (block group, race/ethnicity line). We pivot it to wide format and produce a
+    standardized set of columns:
+
+        geoid_bg (12-digit block group GEOID, e.g. '481130201001')
+        cvap_total
+        cvap_hisp
+        cvap_nh_white
+        cvap_nh_black
+        cvap_nh_asian
+        cvap_nh_native
+        cvap_nh_pi
+        cvap_other
+
+    Notes:
+      - 'geoid' in the file looks like '1500000US<12-digit GEOID>'; we strip to the last 12 digits.
+      - Race lines such as 'White Alone' in this file are within the 'Not Hispanic or Latino' section,
+        so they correspond to *non-Hispanic* race categories.
+      - We keep only the estimate columns (cvap_est). MOE can be added later if needed.
+
+    Args:
+        cvap_blockgr_path: Path to BlockGr.csv from the CVAP special tabulation release.
+        state_fips: 2-digit state FIPS (e.g., '48' for Texas).
+
+    Returns:
+        DataFrame with one row per block group and standardized CVAP columns.
+    """
+    df = pd.read_csv(cvap_blockgr_path, dtype=str)
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    required = {"geoid", "lntitle", "cvap_est"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CVAP BlockGr file missing required columns: {sorted(missing)}")
+
+    # Extract 12-digit BG GEOID
+    df["geoid_bg"] = df["geoid"].astype("string").str[-12:]
+    df = df.loc[df["geoid_bg"].str.startswith(state_fips, na=False)].copy()
+
+    # Numeric cvap_est
+    df["cvap_est"] = pd.to_numeric(df["cvap_est"], errors="coerce").fillna(0)
+
+    wide = (
+        df.pivot_table(index="geoid_bg", columns="lntitle", values="cvap_est", aggfunc="first")
+        .reset_index()
+    )
+
+    def col(name: str) -> pd.Series:
+        if name in wide.columns:
+            return wide[name]
+        return pd.Series(0, index=wide.index, dtype="float64")
+
+    out = pd.DataFrame({"geoid_bg": wide["geoid_bg"].astype("string")})
+
+    # Core lines
+    out["cvap_total"] = col("Total")
+    out["cvap_hisp"] = col("Hispanic or Latino")
+
+    # Non-Hispanic race lines (as labeled in CVAP file)
+    out["cvap_nh_white"] = col("White Alone")
+    out["cvap_nh_black"] = col("Black or African American Alone")
+    out["cvap_nh_asian"] = col("Asian Alone")
+    out["cvap_nh_native"] = col("American Indian or Alaska Native Alone")
+    out["cvap_nh_pi"] = col("Native Hawaiian or Other Pacific Islander Alone")
+
+    # Fill NA -> 0, round to int later after allocation/aggregation
+    for c in [c for c in out.columns if c != "geoid_bg"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
+
+    # Derive 'other' as residual from total
+    known = ["cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi"]
+    out["cvap_other"] = (out["cvap_total"] - out[known].sum(axis=1)).clip(lower=0)
+
+    return out
+
+
 def build_elections_meta(
     processed_dir: Path,
     election_id: str,
-    year: int,
-    office: str,
-    stage: str,
-    notes: str = "",
-) -> None:
-    df = pd.DataFrame(
+    election_year: int,
+    election_office: str,
+    election_stage: str,
+):
+    outs = out_paths(processed_dir)
+    elections = pd.DataFrame(
         [
             {
                 "election_id": election_id,
-                "year": int(year),
-                "office": office,
-                "stage": stage,
-                "notes": notes or None,
+                "year": int(election_year),
+                "office": election_office,
+                "stage": election_stage,
             }
         ]
     )
-    write_parquet(df, processed_dir / "elections.parquet")
+    write_parquet(elections, outs["elections"])
 
 
-def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str, ensemble_id: str) -> None:
-    df = pd.DataFrame(
+def build_plans_meta(processed_dir: Path, plan_id: str, cycle: str, chamber: str, ensemble_id: str):
+    outs = out_paths(processed_dir)
+    plans = pd.DataFrame(
         [
             {
                 "plan_id": plan_id,
-                "plan_type": "ENACTED",
                 "cycle": cycle,
                 "chamber": chamber,
                 "ensemble_id": ensemble_id,
-                "generator": "enacted",
-                "seed": None,
-                "constraints_json": None,
-                "created_at": None,
+                "is_enacted": True,
             }
         ]
     )
-    write_parquet(df, processed_dir / "plans.parquet")
-
-
-def _construct_vtd_geoid_from_cntykey_vtdkey(vtds: "gpd.GeoDataFrame") -> pd.Series:
-    """Construct a stable VTD GEOID from CNTYKEY/VTDKEY (Texas-specific)."""
-    if "cntykey" not in vtds.columns or "vtdkey" not in vtds.columns:
-        raise ValueError(
-            "VTD shapefile is missing cntykey/vtdkey needed to construct vtd_geoid. "
-            "Expected columns like CNTYKEY and VTDKEY."
-        )
-    cnty = pd.to_numeric(vtds["cntykey"], errors="coerce")
-    vtdk = pd.to_numeric(vtds["vtdkey"], errors="coerce")
-    if cnty.isna().any() or vtdk.isna().any():
-        raise ValueError("Could not parse cntykey/vtdkey as numbers for vtd_geoid construction.")
-    return ("48" + cnty.astype("int64").astype(str).str.zfill(3) + vtdk.astype("int64").astype(str).str.zfill(6))
-
-
-def _infer_or_build_vtd_geoid(vtds: "gpd.GeoDataFrame") -> pd.Series:
-    # Prefer TIGER-style GEOID columns if present
-    for cand in ["geoid20", "geoid", "vtdgeoid", "vtd_geoid", "geoid_20"]:
-        if cand in vtds.columns:
-            return vtds[cand].astype("string").str.strip()
-    return _construct_vtd_geoid_from_cntykey_vtdkey(vtds).astype("string")
+    write_parquet(plans, outs["plans"])
 
 
 def build_processed_inputs(
@@ -108,6 +164,7 @@ def build_processed_inputs(
     census_blocks_path: Path,
     vtds_path: Path,
     pl94_path: Path,
+    cvap_blockgr_path: Path,
     elections_path: Path,
     processed_dir: Path,
     plan_id: str,
@@ -123,109 +180,82 @@ def build_processed_inputs(
     if gpd is None:
         raise ImportError("geopandas required for this pipeline (districts/census/vtds are geospatial).")
 
+    processed_dir = Path(processed_dir)
     mkdir_p(processed_dir)
     outs = out_paths(processed_dir)
 
     # -----------------------------
-    # Read raw inputs
+    # Load geospatial inputs
     # -----------------------------
-    districts = ensure_crs(stdcols(read_any(districts_path)))
-    vtds = ensure_crs(stdcols(read_any(vtds_path)))
-    blocks = ensure_crs(stdcols(read_any(census_blocks_path)))
-    pl = stdcols(read_any(pl94_path))
-    elect_raw = stdcols(read_any(elections_path))
+    districts = read_any(districts_path)
+    blocks = read_any(census_blocks_path)
+    vtds = read_any(vtds_path)
+
+    if not isinstance(districts, gpd.GeoDataFrame):
+        districts = gpd.GeoDataFrame(districts, geometry="geometry")
+    if not isinstance(blocks, gpd.GeoDataFrame):
+        blocks = gpd.GeoDataFrame(blocks, geometry="geometry")
+    if not isinstance(vtds, gpd.GeoDataFrame):
+        vtds = gpd.GeoDataFrame(vtds, geometry="geometry")
+
+    districts = ensure_crs(districts)
+    blocks = ensure_crs(blocks)
+    vtds = ensure_crs(vtds)
+
+    # Make sure everything is in same CRS as VTDs
+    if districts.crs != vtds.crs:
+        districts = districts.to_crs(vtds.crs)
+    if blocks.crs != vtds.crs:
+        blocks = blocks.to_crs(vtds.crs)
+
+    # Basic sanity
+    if "geoid20" not in [c.lower() for c in blocks.columns]:
+        # try standardize
+        blocks = stdcols(blocks)
+    blocks = stdcols(blocks)
+    districts = stdcols(districts)
+    vtds = stdcols(vtds)
+
+    if "geoid20" not in blocks.columns:
+        raise ValueError("Blocks file must contain geoid20.")
+
+    # Identify district id column (optional)
+    id_col = pick_district_id_col(districts)
 
     # -----------------------------
-    # VTD keys: build vtd_geoid and numeric vtdkey (for elections join)
+    # Build plan map: assign VTD -> district
     # -----------------------------
-    vtds = vtds.copy()
-    vtds["vtd_geoid"] = _infer_or_build_vtd_geoid(vtds)
+    if "vtdkey" not in vtds.columns:
+        # attempt common alternatives
+        if "vtd" in vtds.columns:
+            vtds = vtds.rename(columns={"vtd": "vtdkey"})
+        elif "vtd_key" in vtds.columns:
+            vtds = vtds.rename(columns={"vtd_key": "vtdkey"})
 
     if "vtdkey" not in vtds.columns:
-        raise ValueError("VTD shapefile is missing VTDKEY (expected column vtdkey after stdcols).")
-    vtds["vtdkey"] = pd.to_numeric(vtds["vtdkey"], errors="coerce").astype("Int64")
-    if vtds["vtdkey"].isna().any():
-        raise ValueError("Some VTDs have missing/non-numeric vtdkey; cannot join elections by vtdkey.")
+        raise ValueError("VTDs must include vtdkey (or a column renameable to vtdkey).")
 
-    vtds = vtds.reset_index(drop=True).copy()
-    vtds["vtd_idx"] = np.arange(len(vtds))
+    # canonical vtd index + geoid
+    vtds = vtds.copy()
+    vtds["vtd_idx"] = np.arange(len(vtds), dtype="int64")
+    vtds["vtd_geoid"] = vtds["vtdkey"].astype("string")
 
-    # -----------------------------
-    # Elections: clean wide returns (prefer vtdkeyvalue key)
-    # -----------------------------
-    elect_wide = clean_vtd_election_returns(elect_raw, office_filter=elections_office_filter, prefer_key="vtdkey")
-    if "vtdkey" not in elect_wide.columns:
-        raise ValueError(
-            "Election file did not yield vtdkey after cleaning. "
-            "Your election file should include vtdkeyvalue or a compatible key."
-        )
+    # canonical district index
+    d = districts.copy()
+    d["district_idx"] = np.arange(len(d), dtype="int64")
 
-    elect_wide = elect_wide.copy()
-    elect_wide["vtdkey"] = pd.to_numeric(elect_wide["vtdkey"], errors="coerce").astype("Int64")
+    # centroid-based spatial join: VTD centroid within district polygon
+    v = vtds[["vtd_idx", "vtd_geoid", "vtdkey", "geometry"]].copy()
+    v["geometry"] = v.geometry.buffer(0).centroid
 
-    # Aggregate duplicates
-    vote_cols = ["dem_votes", "rep_votes", "third_party_votes", "total_votes"]
-    elect_wide = elect_wide.groupby("vtdkey", as_index=False)[vote_cols].sum()
-
-    # Join elections to VTD universe
-    joined = vtds[["vtd_geoid", "vtdkey"]].merge(elect_wide, on="vtdkey", how="left")
-
-    # Preserve missingness (do NOT fill NAs with 0)
-    for c in vote_cols:
-        joined[c] = pd.to_numeric(joined[c], errors="coerce")
-
-    # Store votes as nullable integers to match DuckDB BIGINT schema
-    returns_vtd = pd.DataFrame(
-        {
-            "election_id": election_id,
-            "vtd_geoid": joined["vtd_geoid"].astype("string"),
-            "votes_total": joined["total_votes"].round().astype("Int64"),
-            "votes_dem": joined["dem_votes"].round().astype("Int64"),
-            "votes_rep": joined["rep_votes"].round().astype("Int64"),
-            "votes_other": joined["third_party_votes"].round().astype("Int64"),
-        }
-    )
-
-    returns_vtd["dem_share"] = pd.NA
-    mask = returns_vtd["votes_total"].notna() & (returns_vtd["votes_total"] > 0)
-    returns_vtd.loc[mask, "dem_share"] = (
-        returns_vtd.loc[mask, "votes_dem"].astype("Float64") / returns_vtd.loc[mask, "votes_total"].astype("Float64")
-    )
-
-    write_parquet(returns_vtd, outs["returns_vtd"])
-
-    # -----------------------------
-    # District assignment: plan_district_vtd (enacted)
-    # FIX: centroid-within + nearest fallback (robust to overlaps/slivers)
-    # -----------------------------
-    assert_projected_planar(districts, "districts")
-    assert_projected_planar(vtds, "vtds")
-
-    d = districts.reset_index(drop=True).copy()
-    d["district_idx"] = np.arange(len(d))
-
-    v = vtds.reset_index(drop=True).copy()  # already has vtd_idx
-    id_col = pick_district_id_col(d)
-
-    d_clean = d[["district_idx", "geometry"]].copy()
-    d_clean["geometry"] = d_clean.geometry.buffer(0)
-
-    v_cent = v[["vtd_idx", "geometry"]].copy()
-    v_cent["geometry"] = v_cent.geometry.buffer(0).centroid
-
-    j = gpd.sjoin(v_cent, d_clean, predicate="within", how="left")[["vtd_idx", "district_idx"]]
-
+    j = gpd.sjoin(v, d[["district_idx", "geometry"]], predicate="within", how="left")
     missing = int(j["district_idx"].isna().sum())
     if missing:
+        # fallback: nearest district for missing
         try:
-            miss_mask = j["district_idx"].isna()
-            miss = v_cent.loc[miss_mask, ["vtd_idx", "geometry"]].copy()
-
-            near = gpd.sjoin_nearest(miss, d_clean, how="left", distance_col="dist")[["vtd_idx", "district_idx"]]
-            near_map = near.dropna(subset=["district_idx"]).set_index("vtd_idx")["district_idx"]
-
-            j.loc[miss_mask, "district_idx"] = j.loc[miss_mask, "vtd_idx"].map(near_map)
-
+            miss = j.loc[j["district_idx"].isna(), ["vtd_idx", "geometry"]].copy()
+            near = gpd.sjoin_nearest(miss, d[["district_idx", "geometry"]], how="left", distance_col="dist")
+            j.loc[j["district_idx"].isna(), "district_idx"] = near["district_idx"].to_numpy()
             missing2 = int(j["district_idx"].isna().sum())
             if missing2:
                 examples = j.loc[j["district_idx"].isna(), "vtd_idx"].head(10).tolist()
@@ -258,7 +288,9 @@ def build_processed_inputs(
     #
     # IMPORTANT:
     #   - TOTAL POP uses centroid assignment (no area weights) to avoid double-counting when VTD polygons overlap.
-    #   - VAP (and race-VAP) keeps the existing area-weighted overlay.
+    #   - CVAP is taken from the Census Bureau's CVAP Special Tabulation at BLOCK GROUP level (ACS 5-year),
+    #     allocated down to blocks (by block VAP share within block group), then aggregated to VTD via centroid assignment.
+    #   - We still require PL94 VAP columns *only* to compute allocation weights from block group -> block.
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
     pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
@@ -268,17 +300,33 @@ def build_processed_inputs(
 
     blocks2 = blocks.merge(pl, on="geoid20", how="left")
 
-    # VAP schema (existing)
+    # VAP schema (used only for allocation weights)
     total_col, race_map, _mode = pick_pop_columns(blocks2)
 
-    # TOTAL POP column (new)
+    # TOTAL POP column
     total_pop_col = pick_total_pop_column(blocks2)
+
+    # Load CVAP special tabulation (Block Group level) and merge to blocks
+    cvap_bg = load_cvap_block_groups(cvap_blockgr_path, state_fips="48")
+    blocks2["geoid_bg"] = blocks2["geoid20"].astype("string").str.slice(0, 12)
+    blocks2 = blocks2.merge(cvap_bg, on="geoid_bg", how="left")
+
+    # Allocation weights: block VAP share within block group
+    blocks2[total_col] = pd.to_numeric(blocks2[total_col], errors="coerce").fillna(0)
+    bg_denom = blocks2.groupby("geoid_bg", observed=True)[total_col].transform("sum")
+    w = (blocks2[total_col] / bg_denom.replace(0, np.nan)).fillna(0)
+
+    # Allocate BG CVAP estimates to blocks (float; round after aggregating to VTD)
+    cvap_cols_bg = ["cvap_total", "cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi", "cvap_other"]
+    for c in cvap_cols_bg:
+        if c not in blocks2.columns:
+            blocks2[c] = 0
+        blocks2[c] = pd.to_numeric(blocks2[c], errors="coerce").fillna(0)
+        blocks2[c + "_blk"] = blocks2[c] * w
 
     # Geometry + attributes
     blk = blocks2[["geoid20", "geometry"]].copy()
-
-    vap_cols = [total_col] + list(race_map.values())
-    attrs = blocks2[["geoid20", total_pop_col] + vap_cols].copy()
+    attrs = blocks2[["geoid20", total_pop_col] + [c + "_blk" for c in cvap_cols_bg]].copy()
 
     if blk.crs is None:
         raise ValueError("Blocks CRS is None; cannot overlay. Assign CRS first.")
@@ -340,48 +388,36 @@ def build_processed_inputs(
     )
 
     # -----------------------------
-    # VAP: area-weighted block -> VTD overlay
+    # CVAP: centroid-based block -> VTD aggregation (from allocated block CVAP)
     # -----------------------------
-    inter2 = gpd.overlay(blk, vtds[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
-    if inter2.empty:
-        raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
+    cvap_blk_cols = [c + "_blk" for c in ["cvap_total", "cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi", "cvap_other"]]
+    cent_cvap = cent_join.merge(attrs[["geoid20"] + cvap_blk_cols], on="geoid20", how="left")
 
-    inter2 = inter2.merge(attrs[["geoid20"] + vap_cols], on="geoid20", how="left")
+    for c in cvap_blk_cols:
+        cent_cvap[c] = pd.to_numeric(cent_cvap[c], errors="coerce").fillna(0)
 
-    blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
-    inter2["blk_area"] = blk_area.reindex(inter2["geoid20"]).values
-    inter2["inter_area"] = inter2.geometry.area
-    inter2 = inter2.loc[inter2["blk_area"] > 0].copy()
-    inter2["w"] = (inter2["inter_area"] / inter2["blk_area"]).clip(0, 1)
-
-    for c in vap_cols:
-        inter2[c] = pd.to_numeric(inter2[c], errors="coerce").fillna(0) * inter2["w"]
-
-    agg_vap = inter2.groupby("vtd_idx", observed=True)[vap_cols].sum().reindex(vtds["vtd_idx"], fill_value=0)
-    agg_vap = agg_vap.apply(lambda s: np.rint(s).astype("int64"))
+    cvap_by_vtd = cent_cvap.groupby("vtd_idx", observed=True)[cvap_blk_cols].sum().reindex(vtds["vtd_idx"], fill_value=0)
+    cvap_by_vtd = cvap_by_vtd.apply(lambda s: np.rint(s).astype("int64"))
 
     # -----------------------------
     # Build geo_vtd output
     # -----------------------------
     geo = pd.DataFrame({"vtd_geoid": vtds["vtd_geoid"].astype("string")})
 
-    # TOTAL POP (new)
+    # TOTAL POP
     geo["total_pop"] = total_pop_by_vtd.to_numpy()
 
-    # VAP (existing)
-    geo["vap_total"] = agg_vap[total_col].to_numpy()
-    for out_name, src_col in race_map.items():
-        geo[out_name] = agg_vap[src_col].to_numpy()
+    # CVAP (ACS 5-year; from allocated BG CVAP)
+    geo["cvap_total"] = cvap_by_vtd["cvap_total_blk"].to_numpy()
+    geo["cvap_hisp"] = cvap_by_vtd["cvap_hisp_blk"].to_numpy()
+    geo["cvap_nh_white"] = cvap_by_vtd["cvap_nh_white_blk"].to_numpy()
+    geo["cvap_nh_black"] = cvap_by_vtd["cvap_nh_black_blk"].to_numpy()
+    geo["cvap_nh_asian"] = cvap_by_vtd["cvap_nh_asian_blk"].to_numpy()
+    geo["cvap_nh_native"] = cvap_by_vtd["cvap_nh_native_blk"].to_numpy()
+    geo["cvap_nh_pi"] = cvap_by_vtd["cvap_nh_pi_blk"].to_numpy()
 
-    # Ensure all expected race columns exist for downstream (including nh_native)
-    for col in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]:
-        if col not in geo.columns:
-            geo[col] = 0
-
-    known_cols = [
-        c for c in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"] if c in geo.columns
-    ]
-    geo["vap_other"] = (geo["vap_total"] - geo[known_cols].sum(axis=1)).clip(lower=0).astype("int64")
+    known_cols = ["cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi"]
+    geo["cvap_other"] = (geo["cvap_total"] - geo[known_cols].sum(axis=1)).clip(lower=0).astype("int64")
 
     geo["state_fips"] = "48"
     write_parquet(geo, outs["geo_vtd"])
@@ -402,12 +438,26 @@ def build_processed_inputs(
     if vtds_geo["total_pop"].isna().any():
         n_missing = int(vtds_geo["total_pop"].isna().sum())
         raise ValueError(f"vtds_geo missing total_pop for {n_missing} rows after merge (unexpected).")
-    if vtds_geo["vap_total"].isna().any():
-        n_missing = int(vtds_geo["vap_total"].isna().sum())
-        raise ValueError(f"vtds_geo missing vap_total for {n_missing} rows after merge (unexpected).")
+    if vtds_geo["cvap_total"].isna().any():
+        n_missing = int(vtds_geo["cvap_total"].isna().sum())
+        raise ValueError(f"vtds_geo missing cvap_total for {n_missing} rows after merge (unexpected).")
 
     vtds_geo.to_parquet(vtds_geo_path, index=False)
     print(f"[write] geospatial VTDs -> {vtds_geo_path.resolve()}")
+
+    # -----------------------------
+    # Elections: clean returns keyed to VTDs
+    # -----------------------------
+    returns = read_any(elections_path)
+    returns = stdcols(returns)
+
+    returns_vtd = clean_vtd_election_returns(
+        returns=returns,
+        vtds=vtds[["vtd_geoid", "vtdkey"]],
+        election_id=election_id,
+        office_filter=elections_office_filter,
+    )
+    write_parquet(returns_vtd, outs["returns_vtd"])
 
     # -----------------------------
     # Metadata tables
@@ -432,6 +482,12 @@ def main():
         type=Path,
         required=True,
         help="Block-level attributes keyed by geoid20 (should include PL94 total pop and VAP columns if available).",
+    )
+    ap.add_argument(
+        "--cvap-blockgr",
+        type=Path,
+        required=True,
+        help="ACS CVAP Special Tabulation Block Group file (BlockGr.csv) for the ACS 5-year period you are using.",
     )
     ap.add_argument(
         "--elections",
@@ -464,6 +520,7 @@ def main():
         census_blocks_path=args.census,
         vtds_path=args.vtds,
         pl94_path=args.pl94,
+        cvap_blockgr_path=args.cvap_blockgr,
         elections_path=args.elections,
         processed_dir=args.out,
         plan_id=args.plan_id,
