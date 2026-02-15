@@ -293,6 +293,7 @@ def build_processed_inputs(
     #   - We still require PL94 VAP columns *only* to compute allocation weights from block group -> block.
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
+    pl = read_any(pl94_path)
     pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
 
     pl["geoid20"] = pl["geoid20"].astype("string").str.strip().str.zfill(15)
