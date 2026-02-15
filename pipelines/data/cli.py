@@ -452,13 +452,106 @@ def build_processed_inputs(
     returns = read_any(elections_path)
     returns = stdcols(returns)
 
-    returns_vtd = clean_vtd_election_returns(
-        returns=returns,
-        vtds=vtds[["vtd_geoid", "vtdkey"]],
-        election_id=election_id,
+    # elections.py expects: clean_vtd_election_returns(df, office_filter=..., prefer_key=...)
+    wide = clean_vtd_election_returns(
+        returns,
         office_filter=elections_office_filter,
+        prefer_key="vtdkey",
     )
+
+    # Build a numeric VTD key from the VTD shapefile to join
+    vtd_key_num = pd.to_numeric(vtds["vtdkey"], errors="coerce").astype("Int64")
+    vtd_key_map = (
+        pd.DataFrame(
+            {
+                "vtdkey": vtd_key_num,
+                "vtd_geoid": vtds["vtd_geoid"].astype("string"),
+            }
+        )
+        .dropna(subset=["vtdkey"])
+        .drop_duplicates(subset=["vtdkey"])
+    )
+
+    if "vtdkey" not in wide.columns:
+        raise ValueError(
+            "Election returns did not produce a 'vtdkey' column. "
+            "Your elections file likely lacks 'vtdkeyvalue'. "
+            "Either provide a file with vtdkeyvalue, or extend the pipeline to join on cntyvtd."
+        )
+
+    merged = wide.merge(vtd_key_map, on="vtdkey", how="inner")
+
+    if merged.empty:
+        raise ValueError(
+            "After joining election returns to VTDs on vtdkey, no rows matched. "
+            "Check that elections vtdkeyvalue matches the VTD shapefile's vtdkey."
+        )
+
+    # Standard output schema expected downstream (EI expects votes_total and votes_dem)
+    returns_vtd = pd.DataFrame(
+        {
+            "election_id": election_id,
+            "vtd_geoid": merged["vtd_geoid"].astype("string"),
+            "votes_total": pd.to_numeric(merged["total_votes"], errors="coerce").fillna(0).astype("int64"),
+            "votes_dem": pd.to_numeric(merged["dem_votes"], errors="coerce").fillna(0).astype("int64"),
+        }
+    )
+
     write_parquet(returns_vtd, outs["returns_vtd"])
+
+    # -----------------------------
+    # Elections: clean returns keyed to VTDs
+    # -----------------------------
+    returns = read_any(elections_path)
+    returns = stdcols(returns)
+
+    # elections.py expects: clean_vtd_election_returns(df, office_filter=..., prefer_key=...)
+    wide = clean_vtd_election_returns(
+        returns,
+        office_filter=elections_office_filter,
+        prefer_key="vtdkey",
+    )
+
+    # Build a numeric VTD key from the VTD shapefile to join
+    vtd_key_num = pd.to_numeric(vtds["vtdkey"], errors="coerce").astype("Int64")
+    vtd_key_map = (
+        pd.DataFrame(
+            {
+                "vtdkey": vtd_key_num,
+                "vtd_geoid": vtds["vtd_geoid"].astype("string"),
+            }
+        )
+        .dropna(subset=["vtdkey"])
+        .drop_duplicates(subset=["vtdkey"])
+    )
+
+    if "vtdkey" not in wide.columns:
+        raise ValueError(
+            "Election returns did not produce a 'vtdkey' column. "
+            "Your elections file likely lacks 'vtdkeyvalue'. "
+            "Either provide a file with vtdkeyvalue, or extend the pipeline to join on cntyvtd."
+        )
+
+    merged = wide.merge(vtd_key_map, on="vtdkey", how="inner")
+
+    if merged.empty:
+        raise ValueError(
+            "After joining election returns to VTDs on vtdkey, no rows matched. "
+            "Check that elections vtdkeyvalue matches the VTD shapefile's vtdkey."
+        )
+
+    # Standard output schema expected downstream (EI expects votes_total and votes_dem)
+    returns_vtd = pd.DataFrame(
+        {
+            "election_id": election_id,
+            "vtd_geoid": merged["vtd_geoid"].astype("string"),
+            "votes_total": pd.to_numeric(merged["total_votes"], errors="coerce").fillna(0).astype("int64"),
+            "votes_dem": pd.to_numeric(merged["dem_votes"], errors="coerce").fillna(0).astype("int64"),
+        }
+    )
+
+    write_parquet(returns_vtd, outs["returns_vtd"])
+
 
     # -----------------------------
     # Metadata tables
