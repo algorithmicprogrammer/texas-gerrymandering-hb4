@@ -210,7 +210,7 @@ python -m pipelines.data.cli ^
   --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
   --vtds data/raw/vtds_24pg/VTDs_24PG.shp ^
   --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt ^
-  --cvap-blockgr data/raw/CVAP_2020-2024_ACS_csv_files/BlocksGr.csv ^
+  --cvap-blockgr data/raw/CVAP_2020-2024_ACS_csv_files/BlockGr.csv ^
   --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv ^
   --out data/processed ^
   --plan-id ENACTED_PLANC2333 ^
