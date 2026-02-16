@@ -1,4 +1,4 @@
-# data/cli.py
+# pipelines/data/cli.py
 #!/usr/bin/env python3
 from __future__ import annotations
 
@@ -36,6 +36,9 @@ def out_paths(processed_dir: Path):
     }
 
 
+# -----------------------------
+# CVAP Special Tabulation helpers (ACS 5-year)
+# -----------------------------
 def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataFrame:
     """
     Load Census Bureau CVAP Special Tabulation (ACS 5-year) Block Group file (BlockGr.csv)
@@ -60,6 +63,7 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
     if missing:
         raise ValueError(f"CVAP BlockGr file missing required columns: {sorted(missing)}")
 
+    # Extract 12-digit block-group GEOID (state+county+tract+bg)
     df["geoid_bg"] = df["geoid"].astype("string").str[-12:]
     df = df.loc[df["geoid_bg"].str.startswith(state_fips, na=False)].copy()
 
@@ -77,6 +81,8 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
 
     out["cvap_total"] = col("Total")
     out["cvap_hisp"] = col("Hispanic or Latino")
+
+    # Non-Hispanic race lines in this tabulation
     out["cvap_nh_white"] = col("White Alone")
     out["cvap_nh_black"] = col("Black or African American Alone")
     out["cvap_nh_asian"] = col("Asian Alone")
@@ -94,9 +100,7 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
 
 def build_elections_meta(processed_dir: Path, election_id: str, year: int, office: str, stage: str):
     outs = out_paths(processed_dir)
-    elections = pd.DataFrame(
-        [{"election_id": election_id, "year": int(year), "office": office, "stage": stage}]
-    )
+    elections = pd.DataFrame([{"election_id": election_id, "year": int(year), "office": office, "stage": stage}])
     write_parquet(elections, outs["elections"])
 
 
@@ -152,6 +156,7 @@ def build_processed_inputs(
     blocks = stdcols(ensure_crs(blocks))
     vtds = stdcols(ensure_crs(vtds))
 
+    # project into VTD CRS
     if districts.crs != vtds.crs:
         districts = districts.to_crs(vtds.crs)
     if blocks.crs != vtds.crs:
@@ -173,8 +178,10 @@ def build_processed_inputs(
     vtds["vtd_idx"] = np.arange(len(vtds), dtype="int64")
     vtds["vtd_geoid"] = vtds["vtdkey"].astype("string")
 
+    assert_projected_planar(vtds, "VTDs")
+
     # -----------------------------
-    # Plan map: assign VTD -> district
+    # Plan map: assign VTD -> district (centroid join)
     # -----------------------------
     d = districts.copy()
     d["district_idx"] = np.arange(len(d), dtype="int64")
@@ -199,17 +206,22 @@ def build_processed_inputs(
         best["district_id"] = best["district_idx"] + 1
 
     plan_map = pd.DataFrame(
-        {"plan_id": plan_id, "vtd_geoid": vtds["vtd_geoid"].astype("string"), "district_id": best["district_id"].astype("string")}
+        {
+            "plan_id": plan_id,
+            "vtd_geoid": vtds["vtd_geoid"].astype("string"),
+            "district_id": best["district_id"].astype("string"),
+        }
     )
     write_parquet(plan_map, outs["plan_map"])
 
     # -----------------------------
-    # Demographics: blocks -> VTD
-    #   * TOTAL POP (and total-by-race) via centroid assignment
-    #   * VAP via area-weighted overlay (existing)
-    #   * CVAP via BG->block allocation (weights: block VAP share in BG), then centroid assignment
+    # Demographics: blocks -> VTD using CONSISTENT centroid assignment
+    #   * total_pop and total-by-race (centroid)
+    #   * VAP and VAP-by-race (centroid)   <-- FIX
+    #   * CVAP (BG->block allocation using block VAP weights, then centroid)
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
+
     pl = read_any(pl94_path)
     pl = ensure_geoid20_str(unify_pl94_schema(pl), col="geoid20")
 
@@ -218,26 +230,22 @@ def build_processed_inputs(
 
     blocks2 = blocks.merge(pl, on="geoid20", how="left")
 
-    # Identify columns
+    # Identify block attribute columns
     total_pop_col = pick_total_pop_column(blocks2)
     vap_total_col, vap_race_map, _ = pick_pop_columns(blocks2)
     total_race_map = pick_total_race_columns(blocks2)
 
-    # Ensure numeric
-    for c in [total_pop_col, vap_total_col] + list(vap_race_map.values()) + list(total_race_map.values()):
+    # Ensure numeric on relevant cols
+    numeric_cols = [total_pop_col, vap_total_col] + list(vap_race_map.values()) + list(total_race_map.values())
+    for c in numeric_cols:
         if c in blocks2.columns:
             blocks2[c] = pd.to_numeric(blocks2[c], errors="coerce").fillna(0)
 
+    # Prepare geometries for centroid join
     blk = blocks2[["geoid20", "geometry"]].copy()
-
-    if blk.crs is None or vtds.crs is None:
-        raise ValueError("Missing CRS on blocks or VTDs.")
     if blk.crs != vtds.crs:
         blk = blk.to_crs(vtds.crs)
 
-    assert_projected_planar(vtds, "VTDs")
-
-    # --- centroid join block -> VTD (used for total_pop, total-by-race, and CVAP sums)
     v_clean = vtds[["vtd_idx", "geometry"]].copy()
     v_clean["geometry"] = v_clean.geometry.buffer(0)
 
@@ -246,7 +254,7 @@ def build_processed_inputs(
 
     cent_join = gpd.sjoin(blk_cent[["geoid20", "geometry"]], v_clean, predicate="within", how="left")
 
-    # nearest fallback for unassigned blocks
+    # nearest fallback for unassigned block centroids
     missing = int(cent_join["vtd_idx"].isna().sum())
     if missing:
         miss_mask = cent_join["vtd_idx"].isna()
@@ -257,14 +265,18 @@ def build_processed_inputs(
         if int(cent_join["vtd_idx"].isna().sum()):
             raise ValueError("Some block centroids could not be assigned to any VTD (even nearest).")
 
-    # Attach attributes needed for centroid-based aggregation
-    centroid_attrs_cols = [total_pop_col] + list(total_race_map.values())
-    centroid_attrs = blocks2[["geoid20"] + centroid_attrs_cols].copy()
+    # Attach attributes used for centroid aggregation (total, total-race, vap, vap-race)
+    total_race_cols = list(total_race_map.values())
+    vap_race_cols = list(vap_race_map.values())
+
+    centroid_attr_cols = [total_pop_col] + total_race_cols + [vap_total_col] + vap_race_cols
+    centroid_attrs = blocks2[["geoid20"] + centroid_attr_cols].copy()
+
     cent = cent_join.merge(centroid_attrs, on="geoid20", how="left")
-    for c in centroid_attrs_cols:
+    for c in centroid_attr_cols:
         cent[c] = pd.to_numeric(cent[c], errors="coerce").fillna(0)
 
-    # TOTAL POP totals
+    # --- Total pop (centroid)
     total_pop_by_vtd = (
         cent.groupby("vtd_idx", observed=True)[total_pop_col]
         .sum()
@@ -272,41 +284,27 @@ def build_processed_inputs(
         .astype("int64")
     )
 
-    # TOTAL POP by race (if available)
+    # --- Total pop by race (centroid)
     total_by_vtd = None
-    if total_race_map:
-        total_cols = list(total_race_map.values())
+    if total_race_cols:
         total_by_vtd = (
-            cent.groupby("vtd_idx", observed=True)[total_cols]
+            cent.groupby("vtd_idx", observed=True)[total_race_cols]
             .sum()
             .reindex(vtds["vtd_idx"], fill_value=0)
             .apply(lambda s: np.rint(s).astype("int64"))
         )
 
-    # --- VAP: area-weighted overlay (existing approach)
-    vap_cols = [vap_total_col] + list(vap_race_map.values())
-    vap_attrs = blocks2[["geoid20"] + vap_cols].copy()
+    # --- VAP (centroid)  <-- FIXED HERE
+    vap_by_vtd = (
+        cent.groupby("vtd_idx", observed=True)[[vap_total_col] + vap_race_cols]
+        .sum()
+        .reindex(vtds["vtd_idx"], fill_value=0)
+        .apply(lambda s: np.rint(s).astype("int64"))
+    )
 
-    inter2 = gpd.overlay(blk, vtds[["vtd_idx", "geometry"]], how="intersection", keep_geom_type=False)
-    if inter2.empty:
-        raise ValueError("blocks→VTD overlay returned 0 rows (CRS/geometry mismatch).")
-
-    inter2 = inter2.merge(vap_attrs, on="geoid20", how="left")
-
-    blk_area = blk.set_index("geoid20").geometry.area.rename("blk_area")
-    inter2["blk_area"] = blk_area.reindex(inter2["geoid20"]).values
-    inter2["inter_area"] = inter2.geometry.area
-    inter2 = inter2.loc[inter2["blk_area"] > 0].copy()
-    inter2["w"] = (inter2["inter_area"] / inter2["blk_area"]).clip(0, 1)
-
-    for c in vap_cols:
-        inter2[c] = pd.to_numeric(inter2[c], errors="coerce").fillna(0) * inter2["w"]
-
-    agg_vap = inter2.groupby("vtd_idx", observed=True)[vap_cols].sum().reindex(vtds["vtd_idx"], fill_value=0)
-    agg_vap = agg_vap.apply(lambda s: np.rint(s).astype("int64"))
-
-    # --- CVAP: BG (ACS) -> blocks allocation using block VAP weight, then centroid sum to VTD
+    # --- CVAP: BG->block allocation (weights: block VAP share in BG), then centroid aggregation
     cvap_bg = load_cvap_block_groups(cvap_blockgr_path, state_fips=state_fips)
+
     blocks2["geoid_bg"] = blocks2["geoid20"].astype("string").str.slice(0, 12)
     blocks2 = blocks2.merge(cvap_bg, on="geoid_bg", how="left")
 
@@ -332,6 +330,7 @@ def build_processed_inputs(
 
     cvap_blk_cols = [c + "_blk" for c in cvap_cols_bg]
     cvap_attrs = blocks2[["geoid20"] + cvap_blk_cols].copy()
+
     cent_cvap = cent_join.merge(cvap_attrs, on="geoid20", how="left")
     for c in cvap_blk_cols:
         cent_cvap[c] = pd.to_numeric(cent_cvap[c], errors="coerce").fillna(0)
@@ -344,16 +343,15 @@ def build_processed_inputs(
     )
 
     # -----------------------------
-    # Build geo_vtd output (THIS is what your table script reads)
+    # Build geo_vtd output
     # -----------------------------
     geo = pd.DataFrame({"vtd_geoid": vtds["vtd_geoid"].astype("string")})
 
-    # Total pop totals
+    # Total pop
     geo["total_pop"] = total_pop_by_vtd.to_numpy()
 
-    # Total pop by group (Latino / NH White / NH Black / NH Asian / NH Native / NH PI; then Other)
+    # Total pop by race buckets + residual other
     if total_by_vtd is not None:
-        # Map from source columns -> canonical totals
         inv_total = {v: k for k, v in total_race_map.items()}
         for src in total_by_vtd.columns:
             out_name = inv_total.get(src)
@@ -367,14 +365,13 @@ def build_processed_inputs(
         known_total = ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi"]
         geo["total_other"] = (geo["total_pop"] - geo[known_total].sum(axis=1)).clip(lower=0).astype("int64")
     else:
-        # Still create columns so downstream code doesn't crash; they'll be 0
         for col in ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi", "total_other"]:
             geo[col] = 0
 
-    # VAP totals + groups
-    geo["vap_total"] = agg_vap[vap_total_col].to_numpy()
+    # VAP totals and race buckets
+    geo["vap_total"] = vap_by_vtd[vap_total_col].to_numpy()
     for out_name, src_col in vap_race_map.items():
-        geo[out_name] = agg_vap[src_col].to_numpy()
+        geo[out_name] = vap_by_vtd[src_col].to_numpy()
 
     for col in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]:
         if col not in geo.columns:
@@ -382,7 +379,7 @@ def build_processed_inputs(
     known_vap = ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]
     geo["vap_other"] = (geo["vap_total"] - geo[known_vap].sum(axis=1)).clip(lower=0).astype("int64")
 
-    # CVAP totals + groups
+    # CVAP totals and race buckets
     geo["cvap_total"] = cvap_by_vtd["cvap_total_blk"].to_numpy()
     geo["cvap_hisp"] = cvap_by_vtd["cvap_hisp_blk"].to_numpy()
     geo["cvap_nh_white"] = cvap_by_vtd["cvap_nh_white_blk"].to_numpy()
@@ -395,6 +392,7 @@ def build_processed_inputs(
     geo["cvap_other"] = (geo["cvap_total"] - geo[known_cvap].sum(axis=1)).clip(lower=0).astype("int64")
 
     geo["state_fips"] = state_fips
+
     write_parquet(geo, outs["geo_vtd"])
 
     # -----------------------------
@@ -408,8 +406,7 @@ def build_processed_inputs(
     print(f"[write] geospatial VTDs -> {outs['vtds_geo'].resolve()}")
 
     # -----------------------------
-    # Election returns -> returns_vtd.parquet
-    # (matches elections.py signature)
+    # Election returns -> returns_vtd.parquet (match elections.py signature)
     # -----------------------------
     returns = read_any(elections_path)
     returns = stdcols(returns)
@@ -466,12 +463,7 @@ def main():
     ap.add_argument("--census", type=Path, required=True, help="Block geometries (needs geoid20).")
     ap.add_argument("--vtds", type=Path, required=True, help="VTD polygons.")
     ap.add_argument("--pl94", type=Path, required=True, help="Block-level PL/derived attributes keyed by geoid20.")
-    ap.add_argument(
-        "--cvap-blockgr",
-        type=Path,
-        required=True,
-        help="ACS CVAP Special Tabulation Block Group file (BlockGr.csv).",
-    )
+    ap.add_argument("--cvap-blockgr", type=Path, required=True, help="ACS CVAP Special Tabulation BlockGr.csv.")
     ap.add_argument("--elections", type=Path, required=True, help="Election returns file.")
     ap.add_argument("--out", type=Path, required=True, help="Output directory (data/processed).")
     ap.add_argument("--state-fips", default="48", help="2-digit state FIPS, e.g., 48 for Texas.")
