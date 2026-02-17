@@ -362,8 +362,28 @@ def build_processed_inputs(
             if col not in geo.columns:
                 geo[col] = 0
 
-        known_total = ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi"]
-        geo["total_other"] = (geo["total_pop"] - geo[known_total].sum(axis=1)).clip(lower=0).astype("int64")
+        # --- Define "Other" for the table as: not Latino, not NH White, not NH Black
+        geo["total_other"] = (
+                geo["total_pop"]
+                - geo["total_hisp"]
+                - geo["total_nh_white"]
+                - geo["total_nh_black"]
+        ).clip(lower=0).astype("int64")
+
+        geo["vap_other"] = (
+                geo["vap_total"]
+                - geo["vap_hisp"]
+                - geo["vap_nh_white"]
+                - geo["vap_nh_black"]
+        ).clip(lower=0).astype("int64")
+
+        geo["cvap_other"] = (
+                geo["cvap_total"]
+                - geo["cvap_hisp"]
+                - geo["cvap_nh_white"]
+                - geo["cvap_nh_black"]
+        ).clip(lower=0).astype("int64")
+
     else:
         for col in ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi", "total_other"]:
             geo[col] = 0
