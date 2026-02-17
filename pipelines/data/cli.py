@@ -63,7 +63,6 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
     if missing:
         raise ValueError(f"CVAP BlockGr file missing required columns: {sorted(missing)}")
 
-    # Extract 12-digit block-group GEOID (state+county+tract+bg)
     df["geoid_bg"] = df["geoid"].astype("string").str[-12:]
     df = df.loc[df["geoid_bg"].str.startswith(state_fips, na=False)].copy()
 
@@ -81,8 +80,6 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
 
     out["cvap_total"] = col("Total")
     out["cvap_hisp"] = col("Hispanic or Latino")
-
-    # Non-Hispanic race lines in this tabulation
     out["cvap_nh_white"] = col("White Alone")
     out["cvap_nh_black"] = col("Black or African American Alone")
     out["cvap_nh_asian"] = col("Asian Alone")
@@ -92,6 +89,7 @@ def load_cvap_block_groups(cvap_blockgr_path: Path, state_fips: str) -> pd.DataF
     for c in [c for c in out.columns if c != "geoid_bg"]:
         out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
 
+    # "Other" for CVAP file itself (fine to keep as full residual across all non-Hisp NH groups)
     known = ["cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi"]
     out["cvap_other"] = (out["cvap_total"] - out[known].sum(axis=1)).clip(lower=0)
 
@@ -156,7 +154,6 @@ def build_processed_inputs(
     blocks = stdcols(ensure_crs(blocks))
     vtds = stdcols(ensure_crs(vtds))
 
-    # project into VTD CRS
     if districts.crs != vtds.crs:
         districts = districts.to_crs(vtds.crs)
     if blocks.crs != vtds.crs:
@@ -165,7 +162,6 @@ def build_processed_inputs(
     if "geoid20" not in blocks.columns:
         raise ValueError("Blocks file must contain geoid20.")
 
-    # VTD key normalization
     if "vtdkey" not in vtds.columns:
         if "vtd" in vtds.columns:
             vtds = vtds.rename(columns={"vtd": "vtdkey"})
@@ -216,9 +212,6 @@ def build_processed_inputs(
 
     # -----------------------------
     # Demographics: blocks -> VTD using CONSISTENT centroid assignment
-    #   * total_pop and total-by-race (centroid)
-    #   * VAP and VAP-by-race (centroid)   <-- FIX
-    #   * CVAP (BG->block allocation using block VAP weights, then centroid)
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
 
@@ -235,7 +228,7 @@ def build_processed_inputs(
     vap_total_col, vap_race_map, _ = pick_pop_columns(blocks2)
     total_race_map = pick_total_race_columns(blocks2)
 
-    # Ensure numeric on relevant cols
+    # Ensure numeric
     numeric_cols = [total_pop_col, vap_total_col] + list(vap_race_map.values()) + list(total_race_map.values())
     for c in numeric_cols:
         if c in blocks2.columns:
@@ -254,7 +247,6 @@ def build_processed_inputs(
 
     cent_join = gpd.sjoin(blk_cent[["geoid20", "geometry"]], v_clean, predicate="within", how="left")
 
-    # nearest fallback for unassigned block centroids
     missing = int(cent_join["vtd_idx"].isna().sum())
     if missing:
         miss_mask = cent_join["vtd_idx"].isna()
@@ -265,7 +257,7 @@ def build_processed_inputs(
         if int(cent_join["vtd_idx"].isna().sum()):
             raise ValueError("Some block centroids could not be assigned to any VTD (even nearest).")
 
-    # Attach attributes used for centroid aggregation (total, total-race, vap, vap-race)
+    # Attach attributes
     total_race_cols = list(total_race_map.values())
     vap_race_cols = list(vap_race_map.values())
 
@@ -276,7 +268,7 @@ def build_processed_inputs(
     for c in centroid_attr_cols:
         cent[c] = pd.to_numeric(cent[c], errors="coerce").fillna(0)
 
-    # --- Total pop (centroid)
+    # Total pop (centroid)
     total_pop_by_vtd = (
         cent.groupby("vtd_idx", observed=True)[total_pop_col]
         .sum()
@@ -284,7 +276,7 @@ def build_processed_inputs(
         .astype("int64")
     )
 
-    # --- Total pop by race (centroid)
+    # Total pop by race (centroid)
     total_by_vtd = None
     if total_race_cols:
         total_by_vtd = (
@@ -294,7 +286,7 @@ def build_processed_inputs(
             .apply(lambda s: np.rint(s).astype("int64"))
         )
 
-    # --- VAP (centroid)  <-- FIXED HERE
+    # VAP (centroid)
     vap_by_vtd = (
         cent.groupby("vtd_idx", observed=True)[[vap_total_col] + vap_race_cols]
         .sum()
@@ -302,9 +294,8 @@ def build_processed_inputs(
         .apply(lambda s: np.rint(s).astype("int64"))
     )
 
-    # --- CVAP: BG->block allocation (weights: block VAP share in BG), then centroid aggregation
+    # CVAP: BG->block allocation then centroid to VTD
     cvap_bg = load_cvap_block_groups(cvap_blockgr_path, state_fips=state_fips)
-
     blocks2["geoid_bg"] = blocks2["geoid20"].astype("string").str.slice(0, 12)
     blocks2 = blocks2.merge(cvap_bg, on="geoid_bg", how="left")
 
@@ -347,10 +338,9 @@ def build_processed_inputs(
     # -----------------------------
     geo = pd.DataFrame({"vtd_geoid": vtds["vtd_geoid"].astype("string")})
 
-    # Total pop
     geo["total_pop"] = total_pop_by_vtd.to_numpy()
 
-    # Total pop by race buckets + residual other
+    # total pop by race buckets
     if total_by_vtd is not None:
         inv_total = {v: k for k, v in total_race_map.items()}
         for src in total_by_vtd.columns:
@@ -358,34 +348,9 @@ def build_processed_inputs(
             if out_name is not None:
                 geo[out_name] = total_by_vtd[src].to_numpy()
 
-        for col in ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi"]:
-            if col not in geo.columns:
-                geo[col] = 0
-
-        # --- Define "Other" for the table as: not Latino, not NH White, not NH Black
-        geo["total_other"] = (
-                geo["total_pop"]
-                - geo["total_hisp"]
-                - geo["total_nh_white"]
-                - geo["total_nh_black"]
-        ).clip(lower=0).astype("int64")
-
-        geo["vap_other"] = (
-                geo["vap_total"]
-                - geo["vap_hisp"]
-                - geo["vap_nh_white"]
-                - geo["vap_nh_black"]
-        ).clip(lower=0).astype("int64")
-
-        geo["cvap_other"] = (
-                geo["cvap_total"]
-                - geo["cvap_hisp"]
-                - geo["cvap_nh_white"]
-                - geo["cvap_nh_black"]
-        ).clip(lower=0).astype("int64")
-
-    else:
-        for col in ["total_hisp", "total_nh_white", "total_nh_black", "total_nh_asian", "total_nh_native", "total_nh_pi", "total_other"]:
+    # Ensure required total columns exist
+    for col in ["total_hisp", "total_nh_white", "total_nh_black"]:
+        if col not in geo.columns:
             geo[col] = 0
 
     # VAP totals and race buckets
@@ -393,31 +358,43 @@ def build_processed_inputs(
     for out_name, src_col in vap_race_map.items():
         geo[out_name] = vap_by_vtd[src_col].to_numpy()
 
-    for col in ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]:
+    for col in ["vap_hisp", "vap_nh_white", "vap_nh_black"]:
         if col not in geo.columns:
             geo[col] = 0
-    known_vap = ["vap_nh_white", "vap_nh_black", "vap_hisp", "vap_nh_asian", "vap_nh_native"]
-    geo["vap_other"] = (geo["vap_total"] - geo[known_vap].sum(axis=1)).clip(lower=0).astype("int64")
 
-    # CVAP totals and race buckets
+    # CVAP totals and buckets
     geo["cvap_total"] = cvap_by_vtd["cvap_total_blk"].to_numpy()
     geo["cvap_hisp"] = cvap_by_vtd["cvap_hisp_blk"].to_numpy()
     geo["cvap_nh_white"] = cvap_by_vtd["cvap_nh_white_blk"].to_numpy()
     geo["cvap_nh_black"] = cvap_by_vtd["cvap_nh_black_blk"].to_numpy()
-    geo["cvap_nh_asian"] = cvap_by_vtd["cvap_nh_asian_blk"].to_numpy()
-    geo["cvap_nh_native"] = cvap_by_vtd["cvap_nh_native_blk"].to_numpy()
-    geo["cvap_nh_pi"] = cvap_by_vtd["cvap_nh_pi_blk"].to_numpy()
 
-    known_cvap = ["cvap_hisp", "cvap_nh_white", "cvap_nh_black", "cvap_nh_asian", "cvap_nh_native", "cvap_nh_pi"]
-    geo["cvap_other"] = (geo["cvap_total"] - geo[known_cvap].sum(axis=1)).clip(lower=0).astype("int64")
+    # --- HERE IS THE FIX: define "Other" as residual of (Latino + NH White + NH Black)
+    geo["total_other"] = (
+        geo["total_pop"]
+        - geo["total_hisp"]
+        - geo["total_nh_white"]
+        - geo["total_nh_black"]
+    ).clip(lower=0).astype("int64")
+
+    geo["vap_other"] = (
+        geo["vap_total"]
+        - geo["vap_hisp"]
+        - geo["vap_nh_white"]
+        - geo["vap_nh_black"]
+    ).clip(lower=0).astype("int64")
+
+    geo["cvap_other"] = (
+        geo["cvap_total"]
+        - geo["cvap_hisp"]
+        - geo["cvap_nh_white"]
+        - geo["cvap_nh_black"]
+    ).clip(lower=0).astype("int64")
 
     geo["state_fips"] = state_fips
 
     write_parquet(geo, outs["geo_vtd"])
 
-    # -----------------------------
-    # Write geospatial VTDs parquet (geometry + columns)
-    # -----------------------------
+    # geospatial VTD output
     outs["vtds_geo"].parent.mkdir(parents=True, exist_ok=True)
     vtds_geo = vtds[["vtd_geoid", "vtdkey", "geometry"]].copy()
     vtds_geo = vtds_geo.merge(geo, on="vtd_geoid", how="left")
@@ -425,9 +402,7 @@ def build_processed_inputs(
     vtds_geo.to_parquet(outs["vtds_geo"], index=False)
     print(f"[write] geospatial VTDs -> {outs['vtds_geo'].resolve()}")
 
-    # -----------------------------
-    # Election returns -> returns_vtd.parquet (match elections.py signature)
-    # -----------------------------
+    # Election returns
     returns = read_any(elections_path)
     returns = stdcols(returns)
 
@@ -447,8 +422,7 @@ def build_processed_inputs(
     if "vtdkey" not in wide.columns:
         raise ValueError(
             "Election returns did not produce a 'vtdkey' column. "
-            "Your elections file likely lacks vtdkeyvalue. Provide a file with vtdkeyvalue, "
-            "or extend the join logic to use cntyvtd."
+            "Provide elections with vtdkeyvalue or extend join logic."
         )
 
     merged = wide.merge(vtd_key_map, on="vtdkey", how="inner")
@@ -524,4 +498,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
