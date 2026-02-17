@@ -13,6 +13,11 @@ try:
 except Exception:  # pragma: no cover
     gpd = None
 
+try:
+    import maup
+except Exception:  # pragma: no cover
+    maup = None
+
 from .io import mkdir_p, stdcols, read_any, ensure_crs, assert_projected_planar, write_parquet
 from .elections import clean_vtd_election_returns
 from .demographics import (
@@ -177,23 +182,33 @@ def build_processed_inputs(
     assert_projected_planar(vtds, "VTDs")
 
     # -----------------------------
-    # Plan map: assign VTD -> district (centroid join)
-    # -----------------------------
+    # Plan map: assign VTD -> district (maup.assign)
     d = districts.copy()
     d["district_idx"] = np.arange(len(d), dtype="int64")
     id_col = pick_district_id_col(districts)
 
-    v_cent = vtds[["vtd_idx", "vtd_geoid", "vtdkey", "geometry"]].copy()
-    v_cent["geometry"] = v_cent.geometry.buffer(0).centroid
+    assert_projected_planar(d, "Districts")
 
-    j = gpd.sjoin(v_cent, d[["district_idx", "geometry"]], predicate="within", how="left")
-    missing = int(j["district_idx"].isna().sum())
-    if missing:
-        miss = j.loc[j["district_idx"].isna(), ["vtd_idx", "geometry"]].copy()
-        near = gpd.sjoin_nearest(miss, d[["district_idx", "geometry"]], how="left", distance_col="dist")
-        j.loc[j["district_idx"].isna(), "district_idx"] = near["district_idx"].to_numpy()
-        if int(j["district_idx"].isna().sum()):
-            raise ValueError("Some VTDs could not be assigned to any district (even nearest).")
+    if maup is None:
+        raise ImportError("maup is required for assignment/aggregation. Install with `pip install maup`.")
+
+    # Repair geometries to reduce topological errors before assignment
+    if not maup.doctor(d, silent=True):
+        d = maup.smart_repair(d)
+    if not maup.doctor(vtds, silent=True):
+        vtds = maup.smart_repair(vtds)
+
+    d = d.set_index("district_idx", drop=False)
+    vtds = vtds.set_index("vtd_idx", drop=False)
+
+    vtd_to_district = maup.assign(vtds, d)
+
+    # Build plan_map output (one row per VTD)
+    plan_map = pd.DataFrame({
+        "vtd_geoid": vtds["vtd_geoid"].astype("string"),
+        "district_id": vtd_to_district.map(d[id_col]).astype("string"),
+        "district_idx": vtd_to_district.astype("int64"),
+    })
 
     best = j.drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
     if id_col is not None:
@@ -235,74 +250,86 @@ def build_processed_inputs(
             blocks2[c] = pd.to_numeric(blocks2[c], errors="coerce").fillna(0)
 
     # Prepare geometries for centroid join
+    
+    # -----------------------------
+    # Assign blocks -> VTDs (maup.assign) and aggregate block-level pop/VAP to VTDs
+    # -----------------------------
+    if maup is None:
+        raise ImportError("maup is required for assignment/aggregation. Install with `pip install maup`.")
+
+    # Ensure CRS match and is planar/projected (maup behaves badly in geographic CRS)
     blk = blocks2[["geoid20", "geometry"]].copy()
     if blk.crs != vtds.crs:
         blk = blk.to_crs(vtds.crs)
 
-    v_clean = vtds[["vtd_idx", "geometry"]].copy()
-    v_clean["geometry"] = v_clean.geometry.buffer(0)
+    assert_projected_planar(blk, "Blocks")
+    assert_projected_planar(vtds, "VTDs")
 
-    blk_cent = blk.copy()
-    blk_cent["geometry"] = blk_cent.geometry.buffer(0).centroid
+    # Fix invalid geometries (blocks) and topological issues (VTDs) before assignment
+    blk = blk.copy()
+    blk["geometry"] = maup.repair.make_valid_polygons(blk.geometry, force_polygons=True)
 
-    cent_join = gpd.sjoin(blk_cent[["geoid20", "geometry"]], v_clean, predicate="within", how="left")
+    if not maup.doctor(vtds, silent=True):
+        vtds = maup.smart_repair(vtds)
 
-    missing = int(cent_join["vtd_idx"].isna().sum())
-    if missing:
-        miss_mask = cent_join["vtd_idx"].isna()
-        miss = cent_join.loc[miss_mask, ["geoid20", "geometry"]].copy()
-        near = gpd.sjoin_nearest(miss, v_clean, how="left", distance_col="dist")[["geoid20", "vtd_idx"]]
-        near_map = near.dropna(subset=["vtd_idx"]).set_index("geoid20")["vtd_idx"]
-        cent_join.loc[miss_mask, "vtd_idx"] = cent_join.loc[miss_mask, "geoid20"].map(near_map)
-        if int(cent_join["vtd_idx"].isna().sum()):
-            raise ValueError("Some block centroids could not be assigned to any VTD (even nearest).")
+    vtds = vtds.set_index("vtd_idx", drop=False)
 
-    # Attach attributes
+    with maup.progress():
+        blocks_to_vtd = maup.assign(blk, vtds)
+
+    # Attach attributes we will aggregate
     total_race_cols = list(total_race_map.values())
     vap_race_cols = list(vap_race_map.values())
-
     centroid_attr_cols = [total_pop_col] + total_race_cols + [vap_total_col] + vap_race_cols
-    centroid_attrs = blocks2[["geoid20"] + centroid_attr_cols].copy()
 
-    cent = cent_join.merge(centroid_attrs, on="geoid20", how="left")
     for c in centroid_attr_cols:
-        cent[c] = pd.to_numeric(cent[c], errors="coerce").fillna(0)
+        blocks2[c] = pd.to_numeric(blocks2[c], errors="coerce").fillna(0)
 
-    # Total pop (centroid)
+    # Total pop
     total_pop_by_vtd = (
-        cent.groupby("vtd_idx", observed=True)[total_pop_col]
+        blocks2[total_pop_col]
+        .groupby(blocks_to_vtd, observed=True)
         .sum()
-        .reindex(vtds["vtd_idx"], fill_value=0)
+        .reindex(vtds.index, fill_value=0)
         .astype("int64")
     )
 
-    # Total pop by race (centroid)
+    # Total pop by race
     total_by_vtd = None
     if total_race_cols:
         total_by_vtd = (
-            cent.groupby("vtd_idx", observed=True)[total_race_cols]
+            blocks2[total_race_cols]
+            .groupby(blocks_to_vtd, observed=True)
             .sum()
-            .reindex(vtds["vtd_idx"], fill_value=0)
+            .reindex(vtds.index, fill_value=0)
             .apply(lambda s: np.rint(s).astype("int64"))
         )
 
-    # VAP (centroid)
+    # VAP totals and race buckets
     vap_by_vtd = (
-        cent.groupby("vtd_idx", observed=True)[[vap_total_col] + vap_race_cols]
+        blocks2[[vap_total_col] + vap_race_cols]
+        .groupby(blocks_to_vtd, observed=True)
         .sum()
-        .reindex(vtds["vtd_idx"], fill_value=0)
+        .reindex(vtds.index, fill_value=0)
         .apply(lambda s: np.rint(s).astype("int64"))
     )
 
-    # CVAP: BG->block allocation then centroid to VTD
+    # -----------------------------
+    # CVAP: disaggregate BG -> blocks (maup.prorate), then aggregate blocks -> VTDs
+    # -----------------------------
     cvap_bg = load_cvap_block_groups(cvap_blockgr_path, state_fips=state_fips)
+
     blocks2["geoid_bg"] = blocks2["geoid20"].astype("string").str.slice(0, 12)
-    blocks2 = blocks2.merge(cvap_bg, on="geoid_bg", how="left")
 
-    blocks2[vap_total_col] = pd.to_numeric(blocks2[vap_total_col], errors="coerce").fillna(0)
-    denom = blocks2.groupby("geoid_bg", observed=True)[vap_total_col].transform("sum")
-    w_bg = (blocks2[vap_total_col] / denom.replace(0, np.nan)).fillna(0)
+    # Build block-group geometries by dissolving blocks (exact nesting in Census)
+    bgs = gpd.GeoDataFrame(
+        blocks2[["geoid_bg", "geometry"]]
+        .dissolve(by="geoid_bg", as_index=False),
+        crs=blocks2.crs,
+    )
 
+    # Join BG-level CVAP to BG geometries
+    bgs = bgs.merge(cvap_bg, on="geoid_bg", how="left")
     cvap_cols_bg = [
         "cvap_total",
         "cvap_hisp",
@@ -314,26 +341,45 @@ def build_processed_inputs(
         "cvap_other",
     ]
     for c in cvap_cols_bg:
-        if c not in blocks2.columns:
-            blocks2[c] = 0
-        blocks2[c] = pd.to_numeric(blocks2[c], errors="coerce").fillna(0)
-        blocks2[c + "_blk"] = blocks2[c] * w_bg
+        if c not in bgs.columns:
+            bgs[c] = 0
+        bgs[c] = pd.to_numeric(bgs[c], errors="coerce").fillna(0)
 
-    cvap_blk_cols = [c + "_blk" for c in cvap_cols_bg]
-    cvap_attrs = blocks2[["geoid20"] + cvap_blk_cols].copy()
+    # Repair BG tiling if needed (rare, but dissolve can introduce slivers)
+    if not maup.doctor(bgs, silent=True, accept_holes=True):
+        bgs = maup.smart_repair(bgs)
 
-    cent_cvap = cent_join.merge(cvap_attrs, on="geoid20", how="left")
-    for c in cvap_blk_cols:
-        cent_cvap[c] = pd.to_numeric(cent_cvap[c], errors="coerce").fillna(0)
+    bgs = bgs.set_index("geoid_bg", drop=False)
 
+    # Assign each block to its BG container
+    with maup.progress():
+        blocks_to_bg = maup.assign(blk, bgs)
+
+    # Choose weights for disaggregation (paper is ambiguous; VAP-weighted is typically preferable)
+    # You can swap to total_pop_col or to equal-area weights by changing weight_col.
+    weight_col = vap_total_col if vap_total_col in blocks2.columns else total_pop_col
+    w = pd.to_numeric(blocks2[weight_col], errors="coerce").fillna(0)
+
+    # Normalize weights within each BG as in maup docs for disaggregation via prorate
+    denom = blocks_to_bg.map(w.groupby(blocks_to_bg, observed=True).sum())
+    weights = (w / denom.replace(0, np.nan)).fillna(0)
+
+    # Prorate CVAP from BGs down to blocks
+    block_cvap = maup.prorate(blocks_to_bg, bgs[cvap_cols_bg], weights)
+
+    # Rename to match downstream expectations
+    block_cvap = block_cvap.rename(columns={c: f"{c}_blk" for c in cvap_cols_bg})
+    cvap_blk_cols = list(block_cvap.columns)
+
+    # Aggregate block CVAP up to VTDs
     cvap_by_vtd = (
-        cent_cvap.groupby("vtd_idx", observed=True)[cvap_blk_cols]
+        block_cvap
+        .groupby(blocks_to_vtd, observed=True)
         .sum()
-        .reindex(vtds["vtd_idx"], fill_value=0)
+        .reindex(vtds.index, fill_value=0)
         .apply(lambda s: np.rint(s).astype("int64"))
     )
-
-    # -----------------------------
+# -----------------------------
     # Build geo_vtd output
     # -----------------------------
     geo = pd.DataFrame({"vtd_geoid": vtds["vtd_geoid"].astype("string")})
