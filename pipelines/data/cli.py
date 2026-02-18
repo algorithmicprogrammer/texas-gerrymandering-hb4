@@ -204,29 +204,21 @@ def build_processed_inputs(
     vtd_to_district = maup.assign(vtds, d)
 
     # Build plan_map output (one row per VTD)
+    if id_col is not None:
+        district_ids = vtd_to_district.map(d[id_col]).astype("string")
+    else:
+        district_ids = (vtd_to_district + 1).astype("string")
+
     plan_map = pd.DataFrame({
+        "plan_id": plan_id,
         "vtd_geoid": vtds["vtd_geoid"].astype("string"),
-        "district_id": vtd_to_district.map(d[id_col]).astype("string"),
-        "district_idx": vtd_to_district.astype("int64"),
+        "district_id": district_ids,
     })
 
-    best = j.drop_duplicates("vtd_idx")[["vtd_idx", "district_idx"]]
-    if id_col is not None:
-        best = best.merge(d[["district_idx", id_col]], on="district_idx", how="left").rename(columns={id_col: "district_id"})
-    else:
-        best["district_id"] = best["district_idx"] + 1
-
-    plan_map = pd.DataFrame(
-        {
-            "plan_id": plan_id,
-            "vtd_geoid": vtds["vtd_geoid"].astype("string"),
-            "district_id": best["district_id"].astype("string"),
-        }
-    )
     write_parquet(plan_map, outs["plan_map"])
 
     # -----------------------------
-    # Demographics: blocks -> VTD using CONSISTENT centroid assignment
+    # Demographics: blocks -> VTD using maup.assign
     # -----------------------------
     blocks = ensure_geoid20_str(blocks, col="geoid20")
 
