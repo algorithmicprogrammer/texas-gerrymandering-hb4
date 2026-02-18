@@ -23,7 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from gerrychain import GeographicPartition, Graph, MarkovChain
 from gerrychain.accept import always_accept
-from gerrychain.constraints import within_percent_of_ideal_population
+from gerrychain.constraints import within_percent_of_ideal_population, contiguous
 from gerrychain.proposals import recom
 from gerrychain.tree import bipartition_tree
 from gerrychain.updaters import Tally, cut_edges
@@ -245,7 +245,7 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
 
     chain = MarkovChain(
         proposal=proposal,
-        constraints=[pop_constraint],
+        constraints=[pop_constraint, contiguous],
         accept=always_accept,
         initial_state=init_part,
         total_steps=cfg.n_steps,
