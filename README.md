@@ -237,7 +237,8 @@ python -m pipelines.ensembles.generate_recom_ensemble \
   --seed 20240101 \
   --node-repeats 25 \
   --reselect-tries 75 \
-  --enable-cut-edges-cut \
+  --bipartition-max-attempts 3000 \
+  --enable-cut-edges-cap \
   --max-cut-edges-factor 1.15
 ```
 
