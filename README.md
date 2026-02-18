@@ -226,14 +226,19 @@ python -m pipelines.ensembles.generate_recom_ensemble \
   --vtds-geo data/processed/geospatial/vtds.parquet \
   --enacted-plan-map data/processed/plan_district_vtd.parquet \
   --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --out-plan-map data/processed/ensemble_plan_district_vtd.parquet \
-  --out-plans data/processed/ensemble_plans.parquet \
+  --out-plan-map data/processed/ensemble_planmap_v1.parquet \
+  --out-plans data/processed/ensemble_plans_v1.parquet \
+  --out-plan-stats data/processed/ensemble_planstats_v1.parquet \
   --pop-col total_pop \
   --epsilon 0.01 \
-  --n-steps 5000 \
-  --burnin 500 \
-  --thin 10 \
-  --seed 20240101
+  --n-steps 60000 \
+  --burnin 5000 \
+  --thin 5 \
+  --seed 20240101 \
+  --node-repeats 25 \
+  --reselect-tries 75 \
+  --enable-cut-edges-cut \
+  --max-cut-edges-factor 1.15
 ```
 
 * Command for Windows 11 Command Prompt:
