@@ -1,4 +1,5 @@
 # pipelines/ensembles/generate_recom_ensemble.py
+#
 # Full ensemble generation pipeline (ReCom) with:
 #   - geometry repair (make_valid / buffer(0))
 #   - reproducible seeding
@@ -9,6 +10,11 @@
 #   - streaming plan-map parquet output (zstd)
 #   - plans metadata parquet output
 #   - optional per-plan stats parquet output (cut_edges, max_pop_dev)
+#
+# PUBLISHABLE FIX ADDED:
+#   - If enacted plan is NOT contiguous under the constructed graph, we DO NOT use it as initial_state.
+#   - Instead we generate a contiguous seed plan on the same graph using recursive_tree_part, and run ReCom from that.
+#   - We log enacted contiguity failures (sample) into constraints_json for provenance.
 
 from __future__ import annotations
 
@@ -24,11 +30,12 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
 from gerrychain import GeographicPartition, Graph, MarkovChain
 from gerrychain.accept import always_accept
 from gerrychain.constraints import within_percent_of_ideal_population, contiguous
 from gerrychain.proposals import recom
-from gerrychain.tree import bipartition_tree
+from gerrychain.tree import bipartition_tree, recursive_tree_part
 from gerrychain.updaters import Tally, cut_edges
 
 
@@ -143,6 +150,24 @@ def _repair_geometries(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return gdf
 
 
+def _contiguity_failures(graph: Graph, part: GeographicPartition) -> List[Tuple[str, int, int]]:
+    """
+    Return list of (district_id, n_nodes, n_components) for districts whose induced subgraph is disconnected.
+    """
+    import networkx as nx
+
+    bad: List[Tuple[str, int, int]] = []
+    for dist, nodes in part.parts.items():
+        sg = graph.subgraph(nodes)
+        n_nodes = int(sg.number_of_nodes())
+        if n_nodes == 0:
+            bad.append((str(dist), 0, 0))
+            continue
+        if not nx.is_connected(sg):
+            bad.append((str(dist), n_nodes, int(nx.number_connected_components(sg))))
+    return bad
+
+
 def generate_recom_ensemble(cfg: RunConfig) -> None:
     _ensure_outputs(cfg)
 
@@ -186,7 +211,7 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
             f"Example missing: {missing[:10]}"
         )
 
-    assignment: Dict[str, str] = {str(n): str(vtd_to_dist[str(n)]) for n in graph.nodes}
+    enacted_assignment: Dict[str, str] = {str(n): str(vtd_to_dist[str(n)]) for n in graph.nodes}
 
     # Attach population to graph nodes
     pop_map = gdf[cfg.pop_col].astype(int).to_dict()
@@ -197,16 +222,17 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
         "population": Tally(cfg.pop_col, alias="population"),
         "cut_edges": cut_edges,
     }
-    init_part = GeographicPartition(graph, assignment=assignment, updaters=updaters)
+
+    enacted_part = GeographicPartition(graph, assignment=enacted_assignment, updaters=updaters)
 
     # Ideal population
-    districts = list(set(init_part.assignment.values()))
-    k = len(districts)
-    total_pop = sum(init_part["population"].values())
+    district_labels = sorted(set(enacted_part.assignment.values()))
+    k = len(district_labels)
+    total_pop = sum(enacted_part["population"].values())
     ideal = total_pop / k
 
-    # Auto-relax epsilon if enacted plan violates it (so constraints hold at step 0)
-    pops = list(init_part["population"].values())
+    # Auto-relax epsilon if enacted plan violates it (so constraints can hold at step 0 for seed generation)
+    pops = list(enacted_part["population"].values())
     max_dev_enacted = max(abs(p - ideal) / ideal for p in pops)
     eps = float(cfg.epsilon)
     if max_dev_enacted > eps:
@@ -216,10 +242,10 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
             f"Max deviation is {max_dev_enacted:.6f}; relaxing epsilon to {eps:.6f} so the chain can start."
         )
 
-    pop_constraint = within_percent_of_ideal_population(init_part, eps)
+    pop_constraint = within_percent_of_ideal_population(enacted_part, eps)
 
-    # Optional compactness: cap cut edges relative to enacted plan
-    enacted_cut_edges = len(init_part["cut_edges"])
+    # Optional compactness: cap cut edges relative to enacted plan (reference)
+    enacted_cut_edges = len(enacted_part["cut_edges"])
     max_cut_edges = int(enacted_cut_edges * float(cfg.max_cut_edges_factor))
 
     def cut_edges_cap_constraint(partition: GeographicPartition) -> bool:
@@ -234,6 +260,42 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
         )
     else:
         print("[compactness] cut-edges cap disabled")
+
+    # -----------------------------
+    # PUBLISHABLE FIX:
+    # If enacted plan is not contiguous on this graph, do NOT use it as initial_state.
+    # Build a contiguous seed plan on the same graph via recursive_tree_part.
+    # -----------------------------
+    enacted_contig_fail = _contiguity_failures(graph, enacted_part)
+    enacted_contiguous_under_graph = (len(enacted_contig_fail) == 0)
+    if not enacted_contiguous_under_graph:
+        print("[contiguity] enacted plan is NOT contiguous under this graph representation.")
+        print("[contiguity] example failures (district, nodes, components):", enacted_contig_fail[:10])
+        print("[contiguity] generating a contiguous seed plan with recursive_tree_part...")
+
+        seed_assignment = recursive_tree_part(
+            graph,
+            parts=district_labels,
+            pop_target=ideal,
+            pop_col=cfg.pop_col,
+            epsilon=eps,
+        )
+        initial_part = GeographicPartition(graph, assignment=seed_assignment, updaters=updaters)
+
+        seed_fail = _contiguity_failures(graph, initial_part)
+        if seed_fail:
+            raise RuntimeError(
+                "Seed plan unexpectedly non-contiguous. This suggests a deeper issue with the graph "
+                "or input data. Example failures: "
+                + str(seed_fail[:10])
+            )
+
+        print("[contiguity] seed plan OK (contiguous). Proceeding with ReCom chain.")
+        initial_state_label = "recursive_tree_part"
+    else:
+        initial_part = enacted_part
+        initial_state_label = "enacted_plan"
+        print("[contiguity] enacted plan is contiguous under this graph. Using enacted as initial_state.")
 
     # ReCom resilience: bounded bipartition_tree per try + reselection retries
     def method(*args, **kwargs):
@@ -265,7 +327,7 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
         proposal=proposal,
         constraints=constraints,
         accept=always_accept,
-        initial_state=init_part,
+        initial_state=initial_part,
         total_steps=int(cfg.n_steps),
     )
 
@@ -326,6 +388,10 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
             "thin": int(cfg.thin),
             "n_steps": int(cfg.n_steps),
             "seed": int(cfg.seed),
+            # initial state provenance
+            "initial_state": initial_state_label,
+            "enacted_contiguous_under_graph": bool(enacted_contiguous_under_graph),
+            "enacted_contiguity_failures_sample": enacted_contig_fail[:10],
             # proposal robustness
             "node_repeats": int(cfg.node_repeats),
             "reselect_tries": int(cfg.reselect_tries),
