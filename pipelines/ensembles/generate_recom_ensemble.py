@@ -1,9 +1,9 @@
 # pipelines/ensembles/generate_recom_ensemble.py
 #
-# Full ensemble generation pipeline (ReCom) with:
+# ReCom ensemble generation with:
 #   - geometry repair (make_valid / buffer(0))
 #   - reproducible seeding
-#   - population constraint (auto-relaxes epsilon if enacted violates)
+#   - population constraint (STRICT: never relaxes epsilon)
 #   - contiguity constraint
 #   - optional compactness constraint via cut-edges cap (fast)
 #   - ReCom failure resilience (node_repeats, bounded bipartition_tree, reselection retries)
@@ -11,10 +11,11 @@
 #   - plans metadata parquet output
 #   - optional per-plan stats parquet output (cut_edges, max_pop_dev)
 #
-# PUBLISHABLE FIX ADDED:
-#   - If enacted plan is NOT contiguous under the constructed graph, we DO NOT use it as initial_state.
-#   - Instead we generate a contiguous seed plan on the same graph using recursive_tree_part, and run ReCom from that.
-#   - We log enacted contiguity failures (sample) into constraints_json for provenance.
+# PUBLISHABLE FIX (Option A):
+#   - Enforce exactly the requested epsilon (never auto-relax).
+#   - If enacted plan is invalid under (contiguity OR requested epsilon),
+#     do NOT use enacted as initial_state. Instead, seed with a valid plan
+#     created by recursive_tree_part on the same graph.
 
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import argparse
 import json
 import random
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -231,15 +233,24 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
     total_pop = sum(enacted_part["population"].values())
     ideal = total_pop / k
 
-    # Auto-relax epsilon if enacted plan violates it (so constraints can hold at step 0 for seed generation)
-    pops = list(enacted_part["population"].values())
-    max_dev_enacted = max(abs(p - ideal) / ideal for p in pops)
+    # STRICT epsilon: never relax
     eps = float(cfg.epsilon)
-    if max_dev_enacted > eps:
-        eps = float(max_dev_enacted) + 1e-6
+
+    # Compute enacted deviation under requested epsilon (for reporting and initial-state decision)
+    pops_enacted = list(enacted_part["population"].values())
+    max_dev_enacted = max(abs(p - ideal) / ideal for p in pops_enacted)
+    enacted_pop_ok = (max_dev_enacted <= eps)
+
+    if enacted_pop_ok:
         print(
-            f"[pop] enacted plan violates epsilon={cfg.epsilon:.6f} under pop_col={cfg.pop_col!r}. "
-            f"Max deviation is {max_dev_enacted:.6f}; relaxing epsilon to {eps:.6f} so the chain can start."
+            f"[pop] enacted plan satisfies requested epsilon={eps:.6f} under pop_col={cfg.pop_col!r}. "
+            f"Max deviation is {max_dev_enacted:.6f}."
+        )
+    else:
+        print(
+            f"[pop] WARNING: enacted plan violates requested epsilon={eps:.6f} under pop_col={cfg.pop_col!r}. "
+            f"Max deviation is {max_dev_enacted:.6f}. "
+            f"Proceeding WITHOUT relaxing epsilon; will seed from a valid plan."
         )
 
     pop_constraint = within_percent_of_ideal_population(enacted_part, eps)
@@ -261,17 +272,28 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
     else:
         print("[compactness] cut-edges cap disabled")
 
-    # -----------------------------
-    # PUBLISHABLE FIX:
-    # If enacted plan is not contiguous on this graph, do NOT use it as initial_state.
-    # Build a contiguous seed plan on the same graph via recursive_tree_part.
-    # -----------------------------
+    # If enacted plan is not contiguous, log (but do not start from it)
     enacted_contig_fail = _contiguity_failures(graph, enacted_part)
     enacted_contiguous_under_graph = (len(enacted_contig_fail) == 0)
+
     if not enacted_contiguous_under_graph:
         print("[contiguity] enacted plan is NOT contiguous under this graph representation.")
         print("[contiguity] example failures (district, nodes, components):", enacted_contig_fail[:10])
-        print("[contiguity] generating a contiguous seed plan with recursive_tree_part...")
+
+    # -----------------------------
+    # PUBLISHABLE FIX (Option A):
+    # Seed from a valid plan if enacted fails contiguity OR fails requested epsilon.
+    # -----------------------------
+    need_seed = (not enacted_contiguous_under_graph) or (not enacted_pop_ok)
+
+    if need_seed:
+        if not enacted_pop_ok:
+            print(
+                f"[pop] enacted plan violates requested epsilon={eps:.6f} "
+                f"(max_dev={max_dev_enacted:.6f}); cannot use enacted as initial_state."
+            )
+
+        print("[init] generating a valid seed plan with recursive_tree_part...")
 
         seed_assignment = recursive_tree_part(
             graph,
@@ -282,24 +304,32 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
         )
         initial_part = GeographicPartition(graph, assignment=seed_assignment, updaters=updaters)
 
+        # Verify contiguity
         seed_fail = _contiguity_failures(graph, initial_part)
         if seed_fail:
             raise RuntimeError(
                 "Seed plan unexpectedly non-contiguous. This suggests a deeper issue with the graph "
-                "or input data. Example failures: "
-                + str(seed_fail[:10])
+                "or input data. Example failures: " + str(seed_fail[:10])
             )
 
-        print("[contiguity] seed plan OK (contiguous). Proceeding with ReCom chain.")
+        # Verify population deviation under requested epsilon
+        seed_pops = list(initial_part["population"].values())
+        seed_max_dev = max(abs(p - ideal) / ideal for p in seed_pops)
+        if seed_max_dev > eps + 1e-12:
+            raise RuntimeError(
+                f"Seed plan unexpectedly violates requested epsilon={eps:.6f}. "
+                f"seed_max_dev={seed_max_dev:.6f}"
+            )
+
+        print("[init] seed plan OK (contiguous + population-valid). Proceeding with ReCom chain.")
         initial_state_label = "recursive_tree_part"
     else:
         initial_part = enacted_part
         initial_state_label = "enacted_plan"
-        print("[contiguity] enacted plan is contiguous under this graph. Using enacted as initial_state.")
+        print("[init] enacted plan is valid (contiguous + population-valid). Using enacted as initial_state.")
 
     # ReCom resilience: bounded bipartition_tree per try + reselection retries
-    def method(*args, **kwargs):
-        return bipartition_tree(*args, **kwargs, max_attempts=int(cfg.bipartition_max_attempts))
+    method = partial(bipartition_tree, max_attempts=int(cfg.bipartition_max_attempts))
 
     def proposal(partition: GeographicPartition) -> GeographicPartition:
         last_err: Exception | None = None
@@ -375,13 +405,13 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
                 )
             )
 
-        # plans metadata (one row per kept plan)
         constraints_json = {
             "proposal": "recom",
             "pop_col": cfg.pop_col,
             "epsilon_requested": float(cfg.epsilon),
-            "epsilon_used": float(eps),
+            "epsilon_used": float(eps),  # always equal to epsilon_requested under Option A
             "max_dev_enacted": float(max_dev_enacted),
+            "enacted_pop_ok_under_graph": bool(enacted_pop_ok),
             "ideal_pop": float(ideal),
             "n_districts": int(k),
             "burnin": int(cfg.burnin),
@@ -402,7 +432,7 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
             "enacted_cut_edges": int(enacted_cut_edges),
             "max_cut_edges_factor": float(cfg.max_cut_edges_factor),
             "max_cut_edges": int(max_cut_edges),
-            # diagnostics (for convenience)
+            # diagnostics convenience
             "cut_edges_this_plan": int(cut_edges_now),
             "max_pop_dev_this_plan": float(max_dev_now),
         }
@@ -425,7 +455,6 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
             buffer = []
             print(f"[ensemble] kept {kept} plans (flushed)")
 
-    # finalize
     _write_planmap_rows(writer, buffer)
     writer.close()
 
