@@ -222,24 +222,8 @@ python -m pipelines.data.cli ^
 
 * Command for Linux/MacOS:
 ```commandline
-python -m pipelines.ensembles.generate_recom_ensemble \
-  --vtds-geo data/processed/geospatial/vtds.parquet \
-  --enacted-plan-map data/processed/plan_district_vtd.parquet \
-  --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --out-plan-map data/processed/ensemble_planmap_v1.parquet \
-  --out-plans data/processed/ensemble_plans_v1.parquet \
-  --out-plan-stats data/processed/ensemble_planstats_v1.parquet \
-  --pop-col total_pop \
-  --epsilon 0.01 \
-  --n-steps 60000 \
-  --burnin 5000 \
-  --thin 5 \
-  --seed 20240101 \
-  --node-repeats 25 \
-  --reselect-tries 75 \
-  --bipartition-max-attempts 3000 \
-  --enable-cut-edges-cap \
-  --max-cut-edges-factor 1.15
+chmod +x scripts/run_txcd_recom_4chains.sh
+./scripts/run_txcd_recom_4chains.sh
 ```
 
 * Command for Windows 11 Command Prompt:
