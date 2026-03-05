@@ -1,7 +1,8 @@
-# redistricting/cli.py
+# pipelines/redistricting/cli.py
 from __future__ import annotations
 
 import argparse
+import os
 
 from .db import connect_db
 from .schema import create_schema, upsert_opp_defs
@@ -21,6 +22,52 @@ from .sanity import sanity_checks
 
 
 STAGES = ["schema", "load", "sanity", "aggregates", "metrics", "ensemble", "ei", "export", "all"]
+
+
+def _tune_duckdb(con, db_path: str) -> None:
+    """
+    Reduce peak memory usage and allow DuckDB to handle large parquet reads/inserts better.
+    Safe defaults; overridable via env vars.
+
+    Env vars:
+      DUCKDB_MEMORY_LIMIT (e.g., '8GB', '12GB', '16GB')
+      DUCKDB_THREADS (e.g., '2')
+      DUCKDB_TEMP_DIR (e.g., 'data/.../_duckdb_tmp')
+    """
+    mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "12GB")
+    threads = os.environ.get("DUCKDB_THREADS", "2")
+    temp_dir = os.environ.get("DUCKDB_TEMP_DIR", None)
+
+    # Lower memory pressure during inserts
+    con.execute("SET preserve_insertion_order=false")
+
+    # Constrain parallelism to reduce peak RAM
+    try:
+        con.execute(f"SET threads={int(threads)}")
+    except Exception:
+        # If parsing fails, don't crash the pipeline
+        pass
+
+    # Raise memory limit above the low default you hit (~5.5GiB)
+    try:
+        con.execute(f"SET memory_limit='{mem_limit}'")
+    except Exception:
+        pass
+
+    # Optional: explicit spill directory
+    # If not set, DuckDB still uses temp files as needed, but explicit is nice for reproducibility.
+    if temp_dir:
+        os.makedirs(temp_dir, exist_ok=True)
+        try:
+            con.execute(f"SET temp_directory='{temp_dir}'")
+        except Exception:
+            pass
+
+    # Helpful for debugging / provenance
+    try:
+        con.execute("PRAGMA enable_progress_bar=false")
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -60,6 +107,7 @@ def main() -> None:
     args = p.parse_args()
 
     con = connect_db(args.db)
+    _tune_duckdb(con, args.db)
 
     def run_schema():
         create_schema(con)

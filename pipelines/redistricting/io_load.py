@@ -1,3 +1,4 @@
+# pipelines/redistricting/io_load.py
 from __future__ import annotations
 
 import os
@@ -41,7 +42,6 @@ def load_geo_vtd(con: duckdb.DuckDBPyConnection, path: str) -> None:
         raise ValueError(f"geo_vtd missing columns: {missing}")
 
     # Ensure "schema columns" exist even if ETL didn't provide them
-    # Your geo_vtd.parquet currently has only vtd_geoid + vap_* + state_fips.
     if "state_fips" not in df.columns:
         df["state_fips"] = "48"
     else:
@@ -63,7 +63,6 @@ def load_geo_vtd(con: duckdb.DuckDBPyConnection, path: str) -> None:
 
     con.register("tmp_geo_vtd", df)
 
-    # IMPORTANT: select exactly schema columns (no missing columns => no BinderException)
     con.execute(
         """
         INSERT OR REPLACE INTO geo_vtd
@@ -112,18 +111,52 @@ def load_election(con: duckdb.DuckDBPyConnection, path: str) -> None:
 
 def load_election_returns_vtd(con: duckdb.DuckDBPyConnection, path: str) -> None:
     df = read_table(path)
+    df = df.copy()
+
+    # Reproducible schema normalization:
+    # - accept common aliases for GOP votes
+    # - if votes_rep missing but votes_total & votes_dem exist (two-party),
+    #   construct votes_rep = votes_total - votes_dem
+    alias_map = {
+        "votes_gop": "votes_rep",
+        "votes_r": "votes_rep",
+        "rep_votes": "votes_rep",
+        "votes_republican": "votes_rep",
+    }
+    for src, dst in alias_map.items():
+        if src in df.columns and dst not in df.columns:
+            df = df.rename(columns={src: dst})
+            print(f"[io_load] Renamed {src} -> {dst}")
+
+    if "votes_rep" not in df.columns:
+        if {"votes_total", "votes_dem"}.issubset(df.columns):
+            df["votes_total"] = pd.to_numeric(df["votes_total"], errors="coerce")
+            df["votes_dem"] = pd.to_numeric(df["votes_dem"], errors="coerce")
+            df["votes_rep"] = df["votes_total"] - df["votes_dem"]
+            print("[io_load] Constructed votes_rep = votes_total - votes_dem")
+        else:
+            raise ValueError(
+                "election_returns_vtd missing votes_rep and cannot be constructed "
+                "(need votes_total and votes_dem)."
+            )
+
     required = {"election_id", "vtd_geoid", "votes_total", "votes_dem", "votes_rep"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"election_returns_vtd missing columns: {missing}")
-
-    df = df.copy()
 
     if "votes_other" not in df.columns:
         df["votes_other"] = 0
 
     for c in ["votes_total", "votes_dem", "votes_rep", "votes_other"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Optional data quality check (warn, don't crash)
+    neg_rep = df["votes_rep"].notna() & (df["votes_rep"] < 0)
+    if bool(neg_rep.any()):
+        n = int(neg_rep.sum())
+        ex = df.loc[neg_rep, ["election_id", "vtd_geoid", "votes_total", "votes_dem", "votes_rep"]].head(5)
+        print(f"[io_load] WARNING: {n} rows have negative votes_rep after construction. Examples:\n{ex}")
 
     df["dem_share"] = np.where(
         df["votes_total"].notna() & (df["votes_total"] > 0),
@@ -144,17 +177,42 @@ def load_election_returns_vtd(con: duckdb.DuckDBPyConnection, path: str) -> None
 
 def load_plan(con: duckdb.DuckDBPyConnection, path: str) -> None:
     df = read_table(path)
+    df = df.copy()
+
+    # Required core identifiers
+    required_core = {"plan_id"}
+    missing_core = required_core - set(df.columns)
+    if missing_core:
+        raise ValueError(f"plan missing columns: {missing_core}")
+
+    # Optional-but-expected fields (normalize if missing)
+    for c in ["cycle", "chamber", "ensemble_id"]:
+        if c not in df.columns:
+            df[c] = None
+
+    # Infer plan_type if missing
+    if "plan_type" not in df.columns:
+        ens = df["ensemble_id"].astype("string")
+        is_blank = ens.isna() | (ens.str.strip() == "")
+        df["plan_type"] = np.where(is_blank, "ENACTED", "ENSEMBLE")
+        print("[io_load] Inferred plan_type from ensemble_id (blank -> ENACTED, else ENSEMBLE)")
+
     required = {"plan_id", "plan_type", "cycle", "chamber", "ensemble_id"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"plan missing columns: {missing}")
-
-    df = df.copy()
+        raise ValueError(f"plan missing columns after normalization: {missing}")
 
     # Optional columns for schema compatibility
     for c in ["generator", "seed", "constraints_json", "created_at"]:
         if c not in df.columns:
             df[c] = None
+
+    # Standardize types
+    df["plan_id"] = df["plan_id"].astype(str)
+    df["plan_type"] = df["plan_type"].astype(str)
+    df["cycle"] = df["cycle"].astype("string")
+    df["chamber"] = df["chamber"].astype("string")
+    df["ensemble_id"] = df["ensemble_id"].astype("string")
 
     con.register("tmp_plan", df)
     con.execute(
@@ -168,18 +226,63 @@ def load_plan(con: duckdb.DuckDBPyConnection, path: str) -> None:
 
 
 def load_plan_district_vtd(con: duckdb.DuckDBPyConnection, path: str) -> None:
-    df = read_table(path)
-    required = {"plan_id", "vtd_geoid", "district_id"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"plan_district_vtd missing columns: {missing}")
+    """
+    Load assignments (plan_id, vtd_geoid, district_id) into DuckDB.
 
-    con.register("tmp_map", df)
-    con.execute(
-        """
-        INSERT OR REPLACE INTO plan_district_vtd
-        SELECT plan_id, vtd_geoid, district_id
-        FROM tmp_map
-        """
-    )
-    con.unregister("tmp_map")
+    IMPORTANT: This uses DuckDB-native scanning (read_parquet/read_csv_auto) to avoid
+    materializing huge plan maps in pandas memory (fixes OOM for large ensembles).
+    """
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".parquet":
+        con.execute(
+            """
+            INSERT OR REPLACE INTO plan_district_vtd
+            SELECT
+                CAST(plan_id AS VARCHAR)    AS plan_id,
+                CAST(vtd_geoid AS VARCHAR)  AS vtd_geoid,
+                CAST(district_id AS VARCHAR) AS district_id
+            FROM read_parquet(?)
+            """,
+            [path],
+        )
+        return
+
+    if ext == ".csv":
+        # read_csv_auto will infer types; cast to VARCHAR to match schema expectations
+        con.execute(
+            """
+            INSERT OR REPLACE INTO plan_district_vtd
+            SELECT
+                CAST(plan_id AS VARCHAR)    AS plan_id,
+                CAST(vtd_geoid AS VARCHAR)  AS vtd_geoid,
+                CAST(district_id AS VARCHAR) AS district_id
+            FROM read_csv_auto(?, header=true)
+            """,
+            [path],
+        )
+        return
+
+    # Feather isn't supported by DuckDB scan in the same way, so fall back to pandas for small files
+    if ext == ".feather":
+        df = pd.read_feather(path)
+        required = {"plan_id", "vtd_geoid", "district_id"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"plan_district_vtd missing columns: {missing}")
+
+        con.register("tmp_map", df)
+        con.execute(
+            """
+            INSERT OR REPLACE INTO plan_district_vtd
+            SELECT
+                CAST(plan_id AS VARCHAR)    AS plan_id,
+                CAST(vtd_geoid AS VARCHAR)  AS vtd_geoid,
+                CAST(district_id AS VARCHAR) AS district_id
+            FROM tmp_map
+            """
+        )
+        con.unregister("tmp_map")
+        return
+
+    raise ValueError(f"Unsupported file type for plan map: {ext}")
