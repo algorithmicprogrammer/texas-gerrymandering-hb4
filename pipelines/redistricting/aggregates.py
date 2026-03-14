@@ -1,6 +1,7 @@
 from __future__ import annotations
 import duckdb
 
+
 def build_district_demo_vap(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("DELETE FROM district_demo_vap;")
     con.execute("""
@@ -18,27 +19,43 @@ def build_district_demo_vap(con: duckdb.DuckDBPyConnection) -> None:
         CASE WHEN SUM(g.vap_total) > 0 THEN SUM(g.vap_nh_white)::DOUBLE / SUM(g.vap_total) ELSE NULL END AS share_white_vap,
         CASE WHEN SUM(g.vap_total) > 0 THEN SUM(g.vap_nh_black)::DOUBLE / SUM(g.vap_total) ELSE NULL END AS share_black_vap,
         CASE WHEN SUM(g.vap_total) > 0 THEN SUM(g.vap_hisp)::DOUBLE / SUM(g.vap_total) ELSE NULL END AS share_hisp_vap,
+        CASE WHEN SUM(g.vap_total) > 0 THEN SUM(g.vap_nh_asian)::DOUBLE / SUM(g.vap_total) ELSE NULL END AS share_asian_vap,
+        CASE WHEN SUM(g.vap_total) > 0 THEN SUM(g.vap_nh_native)::DOUBLE / SUM(g.vap_total) ELSE NULL END AS share_native_vap,
         CASE WHEN SUM(g.vap_total) > 0 THEN (1.0 - SUM(g.vap_nh_white)::DOUBLE / SUM(g.vap_total)) ELSE NULL END AS share_minority_vap
     FROM plan_district_vtd pd
     JOIN geo_vtd g ON g.vtd_geoid = pd.vtd_geoid
     GROUP BY pd.plan_id, pd.district_id;
     """)
 
+
+def build_district_demo_cvap(con: duckdb.DuckDBPyConnection) -> None:
+    con.execute("DELETE FROM district_demo_cvap;")
+    con.execute("""
+    INSERT INTO district_demo_cvap
+    SELECT
+        pd.plan_id,
+        pd.district_id,
+        SUM(g.cvap_total) AS cvap_total,
+        SUM(g.cvap_nh_white) AS cvap_nh_white,
+        SUM(g.cvap_nh_black) AS cvap_nh_black,
+        SUM(g.cvap_hisp) AS cvap_hisp,
+        SUM(g.cvap_nh_asian) AS cvap_nh_asian,
+        SUM(g.cvap_nh_native) AS cvap_nh_native,
+        SUM(g.cvap_other) AS cvap_other,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN SUM(g.cvap_nh_white)::DOUBLE / SUM(g.cvap_total) ELSE NULL END AS share_white_cvap,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN SUM(g.cvap_nh_black)::DOUBLE / SUM(g.cvap_total) ELSE NULL END AS share_black_cvap,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN SUM(g.cvap_hisp)::DOUBLE / SUM(g.cvap_total) ELSE NULL END AS share_hisp_cvap,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN SUM(g.cvap_nh_asian)::DOUBLE / SUM(g.cvap_total) ELSE NULL END AS share_asian_cvap,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN SUM(g.cvap_nh_native)::DOUBLE / SUM(g.cvap_total) ELSE NULL END AS share_native_cvap,
+        CASE WHEN SUM(g.cvap_total) > 0 THEN (1.0 - SUM(g.cvap_nh_white)::DOUBLE / SUM(g.cvap_total)) ELSE NULL END AS share_minority_cvap
+    FROM plan_district_vtd pd
+    JOIN geo_vtd g ON g.vtd_geoid = pd.vtd_geoid
+    GROUP BY pd.plan_id, pd.district_id;
+    """)
+
+
 def build_district_returns(con: duckdb.DuckDBPyConnection) -> None:
-    """
-    Aggregate VTD-level returns to districts.
-
-    IMPORTANT:
-    - Uses LEFT JOIN so districts are not dropped when some VTDs have missing returns.
-    - Missing votes remain NULL at the VTD level; SUM ignores NULLs in DuckDB,
-      so totals represent "sum over reported VTDs" rather than silently dropping entire districts.
-    """
     con.execute("DELETE FROM district_returns;")
-
-    # LEFT JOIN keeps all (plan_id, district_id, election_id) combos that exist in returns,
-    # but does not drop districts with partial coverage.
-    # We include election_id from returns; if you want districts present even when *no* VTDs
-    # have returns for an election, you’d need to CROSS JOIN election table—usually unnecessary.
     con.execute("""
     INSERT INTO district_returns
     SELECT
@@ -59,19 +76,3 @@ def build_district_returns(con: duckdb.DuckDBPyConnection) -> None:
     WHERE er.election_id IS NOT NULL
     GROUP BY pd.plan_id, pd.district_id, er.election_id;
     """)
-
-    # Optional: quick coverage diagnostics (prints nothing unless you query it)
-    # Example:
-    # con.execute("""
-    #   SELECT plan_id, district_id, election_id,
-    #          COUNT(*) AS n_vtd_assigned,
-    #          SUM(CASE WHEN votes_total IS NOT NULL THEN 1 ELSE 0 END) AS n_vtd_with_returns
-    #   FROM (
-    #     SELECT pd.plan_id, pd.district_id, er.election_id, er.votes_total
-    #     FROM plan_district_vtd pd
-    #     LEFT JOIN election_returns_vtd er ON er.vtd_geoid = pd.vtd_geoid
-    #   )
-    #   WHERE election_id IS NOT NULL
-    #   GROUP BY plan_id, district_id, election_id
-    #   ORDER BY n_vtd_with_returns / NULLIF(n_vtd_assigned,0) ASC
-    # """).df()
