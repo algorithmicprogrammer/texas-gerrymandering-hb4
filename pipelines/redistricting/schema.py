@@ -3,6 +3,7 @@ import pandas as pd
 import duckdb
 from .config import OpportunityDef
 
+
 def create_schema(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("""
     CREATE TABLE IF NOT EXISTS geo_vtd (
@@ -18,7 +19,14 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         vap_hisp BIGINT,
         vap_nh_asian BIGINT,
         vap_nh_native BIGINT,
-        vap_other BIGINT
+        vap_other BIGINT,
+        cvap_total BIGINT,
+        cvap_nh_white BIGINT,
+        cvap_nh_black BIGINT,
+        cvap_hisp BIGINT,
+        cvap_nh_asian BIGINT,
+        cvap_nh_native BIGINT,
+        cvap_other BIGINT
     );
     """)
 
@@ -82,7 +90,30 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         share_white_vap DOUBLE,
         share_black_vap DOUBLE,
         share_hisp_vap DOUBLE,
+        share_asian_vap DOUBLE,
+        share_native_vap DOUBLE,
         share_minority_vap DOUBLE,
+        PRIMARY KEY (plan_id, district_id)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS district_demo_cvap (
+        plan_id TEXT,
+        district_id TEXT,
+        cvap_total BIGINT,
+        cvap_nh_white BIGINT,
+        cvap_nh_black BIGINT,
+        cvap_hisp BIGINT,
+        cvap_nh_asian BIGINT,
+        cvap_nh_native BIGINT,
+        cvap_other BIGINT,
+        share_white_cvap DOUBLE,
+        share_black_cvap DOUBLE,
+        share_hisp_cvap DOUBLE,
+        share_asian_cvap DOUBLE,
+        share_native_cvap DOUBLE,
+        share_minority_cvap DOUBLE,
         PRIMARY KEY (plan_id, district_id)
     );
     """)
@@ -127,7 +158,7 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         plan_id TEXT,
         opp_def_id TEXT,
         n_opportunity_districts BIGINT,
-        mean_minority_share DOUBLE,
+        mean_group_share DOUBLE,
         PRIMARY KEY (plan_id, opp_def_id)
     );
     """)
@@ -164,7 +195,6 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
     );
     """)
 
-    # EI outputs
     con.execute("""
     CREATE TABLE IF NOT EXISTS ei_run (
         ei_run_id TEXT PRIMARY KEY,
@@ -202,6 +232,48 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
     );
     """)
 
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS district_outcome_summary (
+        ei_run_id TEXT,
+        plan_id TEXT,
+        district_id TEXT,
+        minority_cvap_share DOUBLE,
+        is_majority_minority_cvap BOOLEAN,
+        minority_preferred_win_prob DOUBLE,
+        dem_share_pred_mean DOUBLE,
+        dem_share_pred_q05 DOUBLE,
+        dem_share_pred_q95 DOUBLE,
+        PRIMARY KEY (ei_run_id, plan_id, district_id)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS plan_opportunity_score (
+        ei_run_id TEXT,
+        plan_id TEXT,
+        opportunity_score DOUBLE,
+        n_districts BIGINT,
+        PRIMARY KEY (ei_run_id, plan_id)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS ei_plan_vs_ensemble (
+        ei_run_id TEXT,
+        plan_id TEXT,
+        ensemble_id TEXT,
+        opportunity_score DOUBLE,
+        ensemble_mean DOUBLE,
+        ensemble_sd DOUBLE,
+        percentile DOUBLE,
+        p_value_left DOUBLE,
+        p_value_right DOUBLE,
+        z_score DOUBLE,
+        delta_from_mean DOUBLE,
+        PRIMARY KEY (ei_run_id, plan_id, ensemble_id)
+    );
+    """)
+
 
 def upsert_opp_defs(con: duckdb.DuckDBPyConnection, opp_defs: list[OpportunityDef]) -> None:
     df = pd.DataFrame([{
@@ -209,7 +281,7 @@ def upsert_opp_defs(con: duckdb.DuckDBPyConnection, opp_defs: list[OpportunityDe
         "group_label": od.group_label,
         "group_share_col": od.group_share_col,
         "threshold": od.threshold,
-        "notes": None
+        "notes": None,
     } for od in opp_defs])
 
     con.register("tmp_opp_defs", df)

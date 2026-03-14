@@ -1,159 +1,73 @@
-# redistricting/ensemble_metrics.py
 from __future__ import annotations
-
-from typing import Iterable
 import duckdb
-
-
-def _col_exists(con: duckdb.DuckDBPyConnection, table: str, col: str) -> bool:
-    q = """
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema='main' AND table_name=? AND column_name=?
-    LIMIT 1
-    """
-    return con.execute(q, [table, col]).fetchone() is not None
 
 
 def build_ensemble_distribution(
     con: duckdb.DuckDBPyConnection,
     ensemble_id: str,
-    metric_columns: Iterable[str] = ("n_opportunity_districts",),
+    metric_columns: list[str],
 ) -> None:
     """
-    Build ensemble distribution tables for one or more metric columns in plan_metrics.
-
-    Writes:
-      - ensemble_distribution: one row per (ensemble_id, opp_def_id, metric_name) with summary stats
-      - ensemble_distribution_draws: raw draws per (plan_id, opp_def_id, metric_name)
+    Prong-1 diagnostic distribution builder using plan_metrics.
     """
-    if not ensemble_id:
-        raise ValueError("build_ensemble_distribution: ensemble_id is required")
-
-    metric_columns = list(metric_columns)
-    for mc in metric_columns:
-        if not _col_exists(con, "plan_metrics", mc):
-            cols = con.execute("DESCRIBE plan_metrics").fetchdf()
-            raise ValueError(
-                f"plan_metrics is missing metric column {mc!r}. "
-                f"Available columns: {cols['column_name'].tolist()}"
-            )
-
-    n_plans = con.execute(
-        """
-        SELECT COUNT(*)
-        FROM plan
-        WHERE plan_type='ENSEMBLE' AND ensemble_id=?
-        """,
-        [ensemble_id],
-    ).fetchone()[0]
-
-    if n_plans == 0:
-        sample = con.execute("SELECT * FROM plan LIMIT 10").fetchdf()
-        raise ValueError(
-            "No ensemble plans found under current filter (plan table).\n"
-            f"ensemble_id={ensemble_id!r}\n\nSample plan rows:\n{sample.to_string(index=False)}"
-        )
-
-    # Clear prior results for this ensemble_id
     con.execute("DELETE FROM ensemble_distribution WHERE ensemble_id = ?", [ensemble_id])
 
-    # Build raw draws table (replace fully; it is a helper table used for plotting)
-    union_draws = []
-    for mc in metric_columns:
-        union_draws.append(
-            f"""
+    value_expr = ", ".join([f"('{mc}', {mc})" for mc in metric_columns])
+
+    con.execute(
+        f"""
+        INSERT INTO ensemble_distribution
+        WITH long_metrics AS (
             SELECT
                 p.ensemble_id,
                 pm.opp_def_id,
-                '{mc}' AS metric_name,
-                p.plan_id,
-                pm.{mc}::DOUBLE AS metric_value
+                metric_name,
+                metric_value::DOUBLE AS v
             FROM plan_metrics pm
             JOIN plan p USING (plan_id)
-            WHERE p.plan_type='ENSEMBLE'
-              AND p.ensemble_id = '{ensemble_id}'
-              AND pm.{mc} IS NOT NULL
-            """
+            CROSS JOIN LATERAL (
+                SELECT * FROM (VALUES {value_expr}) AS t(metric_name, metric_value)
+            ) x
+            WHERE p.plan_type = 'ENSEMBLE'
+              AND p.ensemble_id = ?
+              AND metric_value IS NOT NULL
         )
-    con.execute(
-        f"""
-        CREATE OR REPLACE TABLE ensemble_distribution_draws AS
-        {" UNION ALL ".join(union_draws)}
-        """
-    )
-
-    # Summary stats by opp_def_id × metric_name
-    con.execute(
-        """
-        INSERT INTO ensemble_distribution
         SELECT
             ensemble_id,
             opp_def_id,
             metric_name,
-            COUNT(*)::BIGINT AS n_plans,
-            AVG(metric_value) AS mean,
-            STDDEV_SAMP(metric_value) AS sd,
-            quantile_cont(metric_value, 0.01) AS p01,
-            quantile_cont(metric_value, 0.05) AS p05,
-            quantile_cont(metric_value, 0.10) AS p10,
-            quantile_cont(metric_value, 0.25) AS p25,
-            quantile_cont(metric_value, 0.50) AS p50,
-            quantile_cont(metric_value, 0.75) AS p75,
-            quantile_cont(metric_value, 0.90) AS p90,
-            quantile_cont(metric_value, 0.95) AS p95,
-            quantile_cont(metric_value, 0.99) AS p99,
-            MIN(metric_value) AS min,
-            MAX(metric_value) AS max
-        FROM ensemble_distribution_draws
-        WHERE ensemble_id = ?
+            COUNT(*) AS n_plans,
+            AVG(v) AS mean,
+            STDDEV_SAMP(v) AS sd,
+            quantile_cont(v, 0.01) AS p01,
+            quantile_cont(v, 0.05) AS p05,
+            quantile_cont(v, 0.10) AS p10,
+            quantile_cont(v, 0.25) AS p25,
+            quantile_cont(v, 0.50) AS p50,
+            quantile_cont(v, 0.75) AS p75,
+            quantile_cont(v, 0.90) AS p90,
+            quantile_cont(v, 0.95) AS p95,
+            quantile_cont(v, 0.99) AS p99,
+            MIN(v) AS min,
+            MAX(v) AS max
+        FROM long_metrics
         GROUP BY ensemble_id, opp_def_id, metric_name
         """,
         [ensemble_id],
     )
-
-    print("[ensemble] built ensemble_distribution and ensemble_distribution_draws")
+    print("[ensemble] built ensemble_distribution")
 
 
 def build_plan_vs_ensemble(
     con: duckdb.DuckDBPyConnection,
     ensemble_id: str,
-    metric_columns: Iterable[str] = ("n_opportunity_districts",),
+    metric_columns: list[str],
 ) -> None:
     """
-    Compare enacted plan(s) against ensemble distribution for one or more metrics.
-
-    Writes:
-      - plan_vs_ensemble: one row per (plan_id, ensemble_id, opp_def_id, metric_name)
-        with percentile, z-score, tail probs, delta-from-mean.
+    Compare enacted plans to ensemble on Prong-1 diagnostic metrics.
     """
-    if not ensemble_id:
-        raise ValueError("build_plan_vs_ensemble: ensemble_id is required")
-
-    metric_columns = list(metric_columns)
-    for mc in metric_columns:
-        if not _col_exists(con, "plan_metrics", mc):
-            cols = con.execute("DESCRIBE plan_metrics").fetchdf()
-            raise ValueError(
-                f"plan_metrics is missing metric column {mc!r}. "
-                f"Available columns: {cols['column_name'].tolist()}"
-            )
-
-    # Clear prior comparisons for this ensemble
     con.execute("DELETE FROM plan_vs_ensemble WHERE ensemble_id = ?", [ensemble_id])
 
-    # Ensure draws exist (build_ensemble_distribution should have made it, but be robust)
-    existing = con.execute(
-        """
-        SELECT table_name FROM information_schema.tables
-        WHERE table_schema='main'
-        """
-    ).fetchdf()["table_name"].tolist()
-
-    if "ensemble_distribution_draws" not in set(existing):
-        build_ensemble_distribution(con, ensemble_id=ensemble_id, metric_columns=metric_columns)
-
-    # Build comparisons: every non-ensemble plan with this ensemble_id (typically ENACTED)
     con.execute(
         """
         INSERT INTO plan_vs_ensemble
@@ -185,22 +99,15 @@ def build_plan_vs_ensemble(
                 pm_val::DOUBLE AS plan_value
             FROM plan p
             JOIN plan_metrics pm USING (plan_id)
-            -- generate one row per metric via VALUES
             JOIN (
                 SELECT * FROM (VALUES
-                    """ +
-        ", ".join([f"('{mc}')" for mc in metric_columns]) +
-        """) AS t(metric_name)
+                    """ + ", ".join([f"('{mc}')" for mc in metric_columns]) + """
+                ) AS t(metric_name)
             ) m ON TRUE
-            -- pick the appropriate metric value using CASE
             CROSS JOIN LATERAL (
                 SELECT
                     CASE m.metric_name
-        """
-        +
-        "\n".join([f"                        WHEN '{mc}' THEN pm.{mc}" for mc in metric_columns])
-        +
-        """
+        """ + "\n".join([f"                        WHEN '{mc}' THEN pm.{mc}" for mc in metric_columns]) + """
                         ELSE NULL
                     END AS pm_val
             ) x
@@ -215,7 +122,6 @@ def build_plan_vs_ensemble(
                 t.opp_def_id,
                 t.metric_name,
                 t.plan_value,
-                -- percentile P(draw <= plan_value)
                 (SELECT AVG(CASE WHEN d.v <= t.plan_value THEN 1.0 ELSE 0.0 END)
                  FROM draws d
                  WHERE d.ensemble_id=t.ensemble_id
@@ -244,7 +150,92 @@ def build_plan_vs_ensemble(
         """,
         [ensemble_id, ensemble_id],
     )
-
     print("[ensemble] built plan_vs_ensemble")
 
 
+def build_ei_plan_vs_ensemble(
+    con: duckdb.DuckDBPyConnection,
+    ei_run_id: str,
+    ensemble_id: str,
+) -> None:
+    """
+    Main paper comparison:
+      p = P_{pi ~ rho}( O(pi) <= O(pi_enacted) )
+    where O(pi) = sum_k minority_preferred_win_prob_k.
+    """
+    con.execute(
+        "DELETE FROM ei_plan_vs_ensemble WHERE ei_run_id = ? AND ensemble_id = ?",
+        [ei_run_id, ensemble_id],
+    )
+
+    con.execute(
+        """
+        INSERT INTO ei_plan_vs_ensemble
+        WITH ensemble_draws AS (
+            SELECT
+                s.ei_run_id,
+                s.plan_id,
+                p.ensemble_id,
+                s.opportunity_score
+            FROM plan_opportunity_score s
+            JOIN plan p ON p.plan_id = s.plan_id
+            WHERE s.ei_run_id = ?
+              AND p.plan_type = 'ENSEMBLE'
+              AND p.ensemble_id = ?
+        ),
+        ensemble_stats AS (
+            SELECT
+                ei_run_id,
+                ensemble_id,
+                AVG(opportunity_score) AS ensemble_mean,
+                STDDEV_SAMP(opportunity_score) AS ensemble_sd
+            FROM ensemble_draws
+            GROUP BY ei_run_id, ensemble_id
+        ),
+        enacted_targets AS (
+            SELECT
+                s.ei_run_id,
+                s.plan_id,
+                p.ensemble_id,
+                s.opportunity_score
+            FROM plan_opportunity_score s
+            JOIN plan p ON p.plan_id = s.plan_id
+            WHERE s.ei_run_id = ?
+              AND p.plan_type != 'ENSEMBLE'
+              AND p.ensemble_id = ?
+        )
+        SELECT
+            t.ei_run_id,
+            t.plan_id,
+            t.ensemble_id,
+            t.opportunity_score,
+            es.ensemble_mean,
+            es.ensemble_sd,
+            (
+              SELECT AVG(CASE WHEN d.opportunity_score <= t.opportunity_score THEN 1.0 ELSE 0.0 END)
+              FROM ensemble_draws d
+              WHERE d.ei_run_id = t.ei_run_id AND d.ensemble_id = t.ensemble_id
+            ) AS percentile,
+            (
+              SELECT AVG(CASE WHEN d.opportunity_score <= t.opportunity_score THEN 1.0 ELSE 0.0 END)
+              FROM ensemble_draws d
+              WHERE d.ei_run_id = t.ei_run_id AND d.ensemble_id = t.ensemble_id
+            ) AS p_value_left,
+            (
+              SELECT AVG(CASE WHEN d.opportunity_score >= t.opportunity_score THEN 1.0 ELSE 0.0 END)
+              FROM ensemble_draws d
+              WHERE d.ei_run_id = t.ei_run_id AND d.ensemble_id = t.ensemble_id
+            ) AS p_value_right,
+            CASE
+              WHEN es.ensemble_sd IS NULL OR es.ensemble_sd = 0 THEN NULL
+              ELSE (t.opportunity_score - es.ensemble_mean) / es.ensemble_sd
+            END AS z_score,
+            (t.opportunity_score - es.ensemble_mean) AS delta_from_mean
+        FROM enacted_targets t
+        JOIN ensemble_stats es
+          ON es.ei_run_id = t.ei_run_id
+         AND es.ensemble_id = t.ensemble_id
+        """,
+        [ei_run_id, ensemble_id, ei_run_id, ensemble_id],
+    )
+    print("[ensemble] built ei_plan_vs_ensemble")

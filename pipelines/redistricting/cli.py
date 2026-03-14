@@ -1,4 +1,3 @@
-# pipelines/redistricting/cli.py
 from __future__ import annotations
 
 import argparse
@@ -15,9 +14,18 @@ from .io_load import (
     load_plan_district_vtd,
 )
 from .io_export import export_outputs
-from .aggregates import build_district_demo_vap, build_district_returns
-from .opportunity import build_district_opportunity, build_plan_metrics
-from .ensemble_metrics import build_ensemble_distribution, build_plan_vs_ensemble
+from .aggregates import build_district_demo_vap, build_district_demo_cvap, build_district_returns
+from .opportunity import (
+    build_district_opportunity,
+    build_plan_metrics,
+    build_district_outcome_summary,
+    build_plan_opportunity_score,
+)
+from .ensemble_metrics import (
+    build_ensemble_distribution,
+    build_plan_vs_ensemble,
+    build_ei_plan_vs_ensemble,
+)
 from .sanity import sanity_checks
 
 
@@ -25,45 +33,25 @@ STAGES = ["schema", "load", "sanity", "aggregates", "metrics", "ensemble", "ei",
 
 
 def _tune_duckdb(con, db_path: str) -> None:
-    """
-    Reduce peak memory usage and allow DuckDB to handle large parquet reads/inserts better.
-    Safe defaults; overridable via env vars.
-
-    Env vars:
-      DUCKDB_MEMORY_LIMIT (e.g., '8GB', '12GB', '16GB')
-      DUCKDB_THREADS (e.g., '2')
-      DUCKDB_TEMP_DIR (e.g., 'data/.../_duckdb_tmp')
-    """
     mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "12GB")
     threads = os.environ.get("DUCKDB_THREADS", "2")
     temp_dir = os.environ.get("DUCKDB_TEMP_DIR", None)
 
-    # Lower memory pressure during inserts
     con.execute("SET preserve_insertion_order=false")
-
-    # Constrain parallelism to reduce peak RAM
     try:
         con.execute(f"SET threads={int(threads)}")
     except Exception:
-        # If parsing fails, don't crash the pipeline
         pass
-
-    # Raise memory limit above the low default you hit (~5.5GiB)
     try:
         con.execute(f"SET memory_limit='{mem_limit}'")
     except Exception:
         pass
-
-    # Optional: explicit spill directory
-    # If not set, DuckDB still uses temp files as needed, but explicit is nice for reproducibility.
     if temp_dir:
         os.makedirs(temp_dir, exist_ok=True)
         try:
             con.execute(f"SET temp_directory='{temp_dir}'")
         except Exception:
             pass
-
-    # Helpful for debugging / provenance
     try:
         con.execute("PRAGMA enable_progress_bar=false")
     except Exception:
@@ -71,20 +59,16 @@ def _tune_duckdb(con, db_path: str) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Redistricting pipeline (VTD+VAP) with stages")
+    p = argparse.ArgumentParser(description="Redistricting pipeline (CVAP + EI opportunity score) with stages")
 
     p.add_argument("--db", default=":memory:", help="DuckDB path or ':memory:' (default ':memory:')")
     p.add_argument("--stage", default="all", choices=STAGES)
 
-    p.add_argument("--geo-vtd", help="VTD demographics (VAP) parquet/csv")
+    p.add_argument("--geo-vtd", help="VTD demographics parquet/csv")
     p.add_argument("--elections", help="Election metadata parquet/csv")
     p.add_argument("--returns", help="VTD election returns parquet/csv")
-
-    # enacted plan metadata + map
     p.add_argument("--plans", help="Plan metadata parquet/csv (enacted)")
     p.add_argument("--plan-map", help="Assignments (enacted): (plan_id, vtd_geoid, district_id) parquet/csv")
-
-    # ensemble plan metadata + map
     p.add_argument("--ensemble-plans", help="Plan metadata parquet/csv (ensemble)")
     p.add_argument("--ensemble-plan-map", help="Assignments (ensemble): (plan_id, vtd_geoid, district_id) parquet/csv")
 
@@ -92,7 +76,6 @@ def main() -> None:
     p.add_argument("--ei-election-id", help="Election_id for EI fit, e.g. TX_SEN_2024_GEN")
     p.add_argument("--ei-run-id", default="EI_RUN_001")
 
-    # EI sampler controls
     p.add_argument("--ei-draws", type=int, default=2000)
     p.add_argument("--ei-tune", type=int, default=3000)
     p.add_argument("--ei-chains", type=int, default=4)
@@ -100,7 +83,6 @@ def main() -> None:
     p.add_argument("--ei-max-treedepth", type=int, default=15)
     p.add_argument("--ei-seed", type=int, default=None)
 
-    # Export options
     p.add_argument("--out-dir", help="If provided, export derived tables to this directory.")
     p.add_argument("--export-format", default="parquet", choices=["parquet", "csv"])
 
@@ -116,15 +98,11 @@ def main() -> None:
     def run_load():
         if not all([args.geo_vtd, args.elections, args.returns, args.plans, args.plan_map]):
             raise ValueError("For stage=load, provide --geo-vtd --elections --returns --plans --plan-map")
-
         load_geo_vtd(con, args.geo_vtd)
         load_election(con, args.elections)
         load_election_returns_vtd(con, args.returns)
-
         load_plan(con, args.plans)
         load_plan_district_vtd(con, args.plan_map)
-
-        # ensemble data is optional for some stages
         if args.ensemble_plans and args.ensemble_plan_map:
             load_plan(con, args.ensemble_plans)
             load_plan_district_vtd(con, args.ensemble_plan_map)
@@ -134,6 +112,7 @@ def main() -> None:
 
     def run_aggregates():
         build_district_demo_vap(con)
+        build_district_demo_cvap(con)
         build_district_returns(con)
 
     def run_metrics():
@@ -143,17 +122,15 @@ def main() -> None:
     def run_ensemble():
         if not args.ensemble_id:
             raise ValueError("For stage=ensemble, provide --ensemble-id")
-
-        # Build ensemble distribution + enacted comparison for BOTH metrics in plan_metrics
         build_ensemble_distribution(
             con,
             ensemble_id=args.ensemble_id,
-            metric_columns=["n_opportunity_districts", "mean_minority_share"],
+            metric_columns=["n_opportunity_districts", "mean_group_share"],
         )
         build_plan_vs_ensemble(
             con,
             ensemble_id=args.ensemble_id,
-            metric_columns=["n_opportunity_districts", "mean_minority_share"],
+            metric_columns=["n_opportunity_districts", "mean_group_share"],
         )
 
     def run_ei():
@@ -173,6 +150,9 @@ def main() -> None:
             max_treedepth=args.ei_max_treedepth,
             random_seed=args.ei_seed,
         )
+        build_district_outcome_summary(con, args.ei_run_id)
+        build_plan_opportunity_score(con, args.ei_run_id)
+        build_ei_plan_vs_ensemble(con, args.ei_run_id, args.ensemble_id)
 
     def run_export():
         if args.out_dir:

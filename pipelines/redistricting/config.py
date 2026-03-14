@@ -11,6 +11,15 @@ RACE_COLS_VAP: List[str] = [
     "vap_other",
 ]
 
+RACE_COLS_CVAP: List[str] = [
+    "cvap_nh_white",
+    "cvap_nh_black",
+    "cvap_hisp",
+    "cvap_nh_asian",
+    "cvap_nh_native",
+    "cvap_other",
+]
+
 @dataclass(frozen=True)
 class OpportunityDef:
     opp_def_id: str
@@ -19,7 +28,7 @@ class OpportunityDef:
     group_label: str  # "BLACK" / "HISP" / "MINORITY"
 
 DEFAULT_OPP_DEFS: Sequence[OpportunityDef] = (
-    OpportunityDef("BVAP50", "share_black_vap", 0.50, "BLACK"),
-    OpportunityDef("HVAP50", "share_hisp_vap", 0.50, "HISP"),
-    OpportunityDef("MINVAP50", "share_minority_vap", 0.50, "MINORITY"),
+    OpportunityDef("BCVAP50", "share_black_cvap", 0.50, "BLACK"),
+    OpportunityDef("HCVAP50", "share_hisp_cvap", 0.50, "HISP"),
+    OpportunityDef("MINCVAP50", "share_minority_cvap", 0.50, "MINORITY"),
 )
