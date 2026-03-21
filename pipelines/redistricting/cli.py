@@ -92,7 +92,7 @@ def main() -> None:
     p.add_argument("--king-ei-json-out", help="Output JSON artifact for multi-election King EI")
     p.add_argument("--vra-config-json-out", help="Output JSON config consumed by VRA-aware ReCom")
     p.add_argument("--rscript-bin", default="Rscript")
-    p.add_argument("--effectiveness-threshold", type=float, default=0.5)
+    p.add_argument("--effectiveness-threshold", type=float, default=0.6)
 
     p.add_argument("--ei-draws", type=int, default=2000)
     p.add_argument("--ei-tune", type=int, default=3000)
@@ -189,13 +189,12 @@ def main() -> None:
             if not args.enacted_plan_id:
                 raise ValueError("Provide --enacted-plan-id when writing --vra-config-json-out")
             raw = json.loads(Path(out_json).read_text(encoding="utf-8"))
-            pref_df = raw["group_preferences"]
             pref = {}
             conf = {}
             weights = {}
             elections = []
             groups = []
-            for row in pref_df:
+            for row in raw["group_preferences"]:
                 g = row["group_id"]
                 e = row["election_id"]
                 pref.setdefault(g, {})[e] = row["preferred_candidate_id"]
@@ -205,18 +204,12 @@ def main() -> None:
                     elections.append(e)
                 if g not in groups:
                     groups.append(g)
-            benchmark = build_vra_benchmark_from_enacted(
-                con,
-                enacted_plan_id=args.enacted_plan_id,
-                ei_json_path=out_json,
-                effectiveness_threshold=args.effectiveness_threshold,
-                group_ids=groups,
-            )
+
             cfg = {
                 "elections": elections,
                 "groups": groups,
                 "effectiveness_threshold": args.effectiveness_threshold,
-                "benchmark": benchmark,
+                "benchmark": {},
                 "election_weights": weights,
                 "preferred_candidates": pref,
                 "confidence_scores": conf,
@@ -228,8 +221,19 @@ def main() -> None:
                     "WCVAP": "cvap_nh_white",
                     "OCVAP": "cvap_other",
                 },
+                "election_sets": raw.get("election_sets", []),
+                "calibration": {"kind": "logistic", "a": 8.0, "b": -4.0},
+                "group_preferred_factors": {},
             }
+            tmp_cfg_path = Path(args.vra_config_json_out).with_suffix(".tmp.json")
+            tmp_cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            cfg["benchmark"] = build_vra_benchmark_from_enacted(
+                con,
+                enacted_plan_id=args.enacted_plan_id,
+                vra_config_json=str(tmp_cfg_path),
+            )
             Path(args.vra_config_json_out).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            tmp_cfg_path.unlink(missing_ok=True)
             print(f"[ei-king-multi] wrote {args.vra_config_json_out}")
 
     def run_export():
@@ -256,7 +260,3 @@ def main() -> None:
         run_export()
 
     print(f"Done. stage={args.stage}")
-
-
-if __name__ == "__main__":
-    main()

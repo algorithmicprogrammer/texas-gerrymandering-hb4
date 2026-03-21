@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 
@@ -21,6 +21,19 @@ suppressPackageStartupMessages({
   library(eiPack)
 })
 
+as_nested_draw <- function(arr2d, row_names, col_names) {
+  out <- list()
+  for (i in seq_along(row_names)) {
+    rn <- row_names[[i]]
+    out[[rn]] <- list()
+    for (j in seq_along(col_names)) {
+      cn <- col_names[[j]]
+      out[[rn]][[cn]] <- unname(arr2d[i, j])
+    }
+  }
+  out
+}
+
 args <- commandArgs(trailingOnly = TRUE)
 input_path <- args[1]
 output_path <- args[2]
@@ -31,12 +44,9 @@ returns <- read_csv(cfg$returns_csv, show_col_types = FALSE)
 weights <- read_csv(cfg$weights_csv, show_col_types = FALSE)
 
 groups <- cfg$groups
-all_results <- list()
-
 group_pref_rows <- list()
 precinct_draw_rows <- list()
 
-i <- 1
 for (eid in unique(weights$election_id)) {
   w <- weights |> filter(election_id == eid) |> slice(1)
   election_weight <- ifelse("weight" %in% names(w), w$weight[[1]], 1.0)
@@ -49,24 +59,20 @@ for (eid in unique(weights$election_id)) {
 
   merged <- cvap |> inner_join(wide_ret, by = "vtd_geoid")
   cand_cols <- setdiff(names(wide_ret), "vtd_geoid")
-  merged$None <- pmax(merged$cvap_total - rowSums(as.matrix(merged[, cand_cols, drop = FALSE])), 0)
+  if (length(cand_cols) < 2) next
 
+  merged$None <- pmax(merged$cvap_total - rowSums(as.matrix(merged[, cand_cols, drop = FALSE])), 0)
   row_cols <- groups
   col_cols <- c(cand_cols, "None")
 
-  # ei.MD.bayes takes matrices of row and column marginals for RxC tables.
   row_margins <- as.matrix(merged[, row_cols, drop = FALSE])
   col_margins <- as.matrix(merged[, col_cols, drop = FALSE])
 
   fit <- ei.MD.bayes(t = row_margins, total = rowSums(row_margins), y = col_margins, sample = 1000, burnin = 200)
-
-  # fit$Beta.sims is draws x precinct x (R*C) in eiPack implementations used in practice.
   beta <- fit$Beta.sims
   dims <- dim(beta)
   ndraws <- dims[[1]]
   nprec <- dims[[2]]
-  rc <- dims[[3]]
-
   arr <- array(beta, dim = c(ndraws, nprec, length(row_cols), length(col_cols)))
 
   for (g_idx in seq_along(row_cols)) {
@@ -95,11 +101,12 @@ for (eid in unique(weights$election_id)) {
 
   for (d in seq_len(ndraws)) {
     for (p_idx in seq_len(nprec)) {
+      payload <- as_nested_draw(arr[d, p_idx, , , drop = TRUE], row_cols, col_cols)
       precinct_draw_rows[[length(precinct_draw_rows) + 1]] <- data.frame(
         election_id = eid,
         draw = d,
         vtd_geoid = merged$vtd_geoid[[p_idx]],
-        json = toJSON(as.list(as.data.frame(arr[d, p_idx, , , drop = FALSE])), auto_unbox = TRUE)
+        json = toJSON(payload, auto_unbox = TRUE)
       )
     }
   }
@@ -109,6 +116,50 @@ pref_df <- bind_rows(group_pref_rows)
 draw_df <- bind_rows(precinct_draw_rows)
 write_json(list(group_preferences = pref_df, precinct_draws = draw_df), output_path, auto_unbox = TRUE)
 '''
+
+
+def infer_election_sets(elections: pd.DataFrame) -> list[dict[str, Any]]:
+    df = elections.copy()
+    for col in ("office", "stage"):
+        if col not in df.columns:
+            df[col] = None
+    if "year" not in df.columns:
+        df["year"] = None
+    df["election_id"] = df["election_id"].astype(str)
+    df["stage_norm"] = df["stage"].fillna("").astype(str).str.lower()
+
+    sets: list[dict[str, Any]] = []
+    for (year, office), sub in df.groupby([df["year"].fillna(-1), df["office"].fillna("UNKNOWN")], sort=False):
+        primary = None
+        runoff = None
+        general = None
+        for _, row in sub.iterrows():
+            st = str(row["stage_norm"])
+            eid = str(row["election_id"])
+            if "general" in st:
+                general = eid
+            elif "runoff" in st:
+                runoff = eid
+            elif "primary" in st:
+                primary = eid
+            elif primary is None:
+                primary = eid
+        ids = [x for x in [primary, runoff, general] if x is not None]
+        if not ids:
+            continue
+        weights = [float(sub.loc[sub["election_id"] == eid, "weight"].iloc[0]) if "weight" in sub.columns else 1.0 for eid in ids]
+        sets.append(
+            {
+                "set_id": f"{year}|{office}",
+                "primary": primary,
+                "runoff": runoff,
+                "general": general,
+                "weight": max(weights) if weights else 1.0,
+                "year": None if pd.isna(year) or year == -1 else int(year),
+                "office": None if office == "UNKNOWN" else office,
+            }
+        )
+    return sets
 
 
 def build_king_brennan_inputs(
@@ -145,14 +196,19 @@ def build_king_brennan_inputs(
     candidate_returns.to_csv(returns_csv, index=False)
 
     elections = pd.read_parquet(elections_path) if elections_path.endswith(".parquet") else pd.read_csv(elections_path)
+    if "weight" not in elections.columns:
+        elections = elections.copy()
+        elections["weight"] = 1.0
     weights_csv = out / "election_weights.csv"
-    elections[[c for c in elections.columns if c in {"election_id", "weight"}]].assign(weight=lambda d: d.get("weight", 1.0)).to_csv(weights_csv, index=False)
+    elections[[c for c in elections.columns if c in {"election_id", "weight"}]].to_csv(weights_csv, index=False)
 
     return {
         "cvap_csv": str(cvap_csv),
         "returns_csv": str(returns_csv),
         "weights_csv": str(weights_csv),
         "groups": ["HCVAP", "BCVAP", "WCVAP", "OCVAP"],
+        "election_sets": infer_election_sets(elections),
+        "elections_table": elections.to_dict(orient="records"),
     }
 
 
@@ -170,16 +226,22 @@ def run_king_ei_multielection(
         td_path = Path(td)
         cfg = build_king_brennan_inputs(con, candidate_returns_path, elections_path, td)
         input_json = td_path / "king_input.json"
+        raw_output_json = td_path / "king_output_raw.json"
         script_path = td_path / "run_ei.R"
         input_json.write_text(json.dumps(cfg), encoding="utf-8")
         script_path.write_text(R_SCRIPT, encoding="utf-8")
 
         proc = subprocess.run(
-            [rscript_bin, str(script_path), str(input_json), str(output_json)],
+            [rscript_bin, str(script_path), str(input_json), str(raw_output_json)],
             check=False,
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
             raise RuntimeError(f"King EI R job failed. stderr:\n{proc.stderr}\nstdout:\n{proc.stdout}")
+
+        raw = json.loads(raw_output_json.read_text(encoding="utf-8"))
+        raw["election_sets"] = cfg["election_sets"]
+        raw["elections_table"] = cfg["elections_table"]
+        Path(output_json).write_text(json.dumps(raw, indent=2), encoding="utf-8")
     return output_json
