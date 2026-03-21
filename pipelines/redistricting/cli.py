@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from pathlib import Path
 
 from .db import connect_db
 from .schema import create_schema, upsert_opp_defs
@@ -10,6 +12,7 @@ from .io_load import (
     load_geo_vtd,
     load_election,
     load_election_returns_vtd,
+    load_candidate_returns_vtd,
     load_plan,
     load_plan_district_vtd,
 )
@@ -27,9 +30,22 @@ from .ensemble_metrics import (
     build_ei_plan_vs_ensemble,
 )
 from .sanity import sanity_checks
+from .ei.king_vra import run_king_ei_multielection
+from .vra import build_vra_benchmark_from_enacted
 
 
-STAGES = ["schema", "load", "sanity", "aggregates", "metrics", "ensemble", "ei", "export", "all"]
+STAGES = [
+    "schema",
+    "load",
+    "sanity",
+    "aggregates",
+    "metrics",
+    "ensemble",
+    "ei",
+    "ei-king-multi",
+    "export",
+    "all",
+]
 
 
 def _tune_duckdb(con, db_path: str) -> None:
@@ -52,29 +68,31 @@ def _tune_duckdb(con, db_path: str) -> None:
             con.execute(f"SET temp_directory='{temp_dir}'")
         except Exception:
             pass
-    try:
-        con.execute("PRAGMA enable_progress_bar=false")
-    except Exception:
-        pass
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Redistricting pipeline (CVAP + EI opportunity score) with stages")
+    p = argparse.ArgumentParser(description="Redistricting pipeline with Brennan-style VRA-aware ReCom support")
 
-    p.add_argument("--db", default=":memory:", help="DuckDB path or ':memory:' (default ':memory:')")
+    p.add_argument("--db", default=":memory:", help="DuckDB path or ':memory:'")
     p.add_argument("--stage", default="all", choices=STAGES)
 
     p.add_argument("--geo-vtd", help="VTD demographics parquet/csv")
     p.add_argument("--elections", help="Election metadata parquet/csv")
-    p.add_argument("--returns", help="VTD election returns parquet/csv")
+    p.add_argument("--returns", help="Two-party VTD election returns parquet/csv")
+    p.add_argument("--candidate-returns", help="Candidate-level VTD returns parquet/csv for King EI")
     p.add_argument("--plans", help="Plan metadata parquet/csv (enacted)")
-    p.add_argument("--plan-map", help="Assignments (enacted): (plan_id, vtd_geoid, district_id) parquet/csv")
+    p.add_argument("--plan-map", help="Assignments (enacted): (plan_id, vtd_geoid, district_id)")
     p.add_argument("--ensemble-plans", help="Plan metadata parquet/csv (ensemble)")
-    p.add_argument("--ensemble-plan-map", help="Assignments (ensemble): (plan_id, vtd_geoid, district_id) parquet/csv")
+    p.add_argument("--ensemble-plan-map", help="Assignments (ensemble): (plan_id, vtd_geoid, district_id)")
 
-    p.add_argument("--ensemble-id", help="Ensemble id (e.g. ENS_TXCD_2024_recom_v1)")
-    p.add_argument("--ei-election-id", help="Election_id for EI fit, e.g. TX_SEN_2024_GEN")
+    p.add_argument("--ensemble-id", help="Ensemble id")
+    p.add_argument("--enacted-plan-id", help="Enacted plan id used for VRA benchmark")
+    p.add_argument("--ei-election-id", help="Legacy single-election EI id")
     p.add_argument("--ei-run-id", default="EI_RUN_001")
+    p.add_argument("--king-ei-json-out", help="Output JSON artifact for multi-election King EI")
+    p.add_argument("--vra-config-json-out", help="Output JSON config consumed by VRA-aware ReCom")
+    p.add_argument("--rscript-bin", default="Rscript")
+    p.add_argument("--effectiveness-threshold", type=float, default=0.5)
 
     p.add_argument("--ei-draws", type=int, default=2000)
     p.add_argument("--ei-tune", type=int, default=3000)
@@ -101,6 +119,8 @@ def main() -> None:
         load_geo_vtd(con, args.geo_vtd)
         load_election(con, args.elections)
         load_election_returns_vtd(con, args.returns)
+        if args.candidate_returns:
+            load_candidate_returns_vtd(con, args.candidate_returns)
         load_plan(con, args.plans)
         load_plan_district_vtd(con, args.plan_map)
         if args.ensemble_plans and args.ensemble_plan_map:
@@ -154,6 +174,64 @@ def main() -> None:
         build_plan_opportunity_score(con, args.ei_run_id)
         build_ei_plan_vs_ensemble(con, args.ei_run_id, args.ensemble_id)
 
+    def run_ei_king_multi():
+        if not args.candidate_returns or not args.elections or not args.king_ei_json_out:
+            raise ValueError("For stage=ei-king-multi, provide --candidate-returns --elections --king-ei-json-out")
+        out_json = run_king_ei_multielection(
+            con=con,
+            candidate_returns_path=args.candidate_returns,
+            elections_path=args.elections,
+            output_json=args.king_ei_json_out,
+            rscript_bin=args.rscript_bin,
+        )
+        print(f"[ei-king-multi] wrote {out_json}")
+        if args.vra_config_json_out:
+            if not args.enacted_plan_id:
+                raise ValueError("Provide --enacted-plan-id when writing --vra-config-json-out")
+            raw = json.loads(Path(out_json).read_text(encoding="utf-8"))
+            pref_df = raw["group_preferences"]
+            pref = {}
+            conf = {}
+            weights = {}
+            elections = []
+            groups = []
+            for row in pref_df:
+                g = row["group_id"]
+                e = row["election_id"]
+                pref.setdefault(g, {})[e] = row["preferred_candidate_id"]
+                conf.setdefault(g, {})[e] = float(row["confidence"])
+                weights[e] = float(row.get("election_weight", 1.0))
+                if e not in elections:
+                    elections.append(e)
+                if g not in groups:
+                    groups.append(g)
+            benchmark = build_vra_benchmark_from_enacted(
+                con,
+                enacted_plan_id=args.enacted_plan_id,
+                ei_json_path=out_json,
+                effectiveness_threshold=args.effectiveness_threshold,
+                group_ids=groups,
+            )
+            cfg = {
+                "elections": elections,
+                "groups": groups,
+                "effectiveness_threshold": args.effectiveness_threshold,
+                "benchmark": benchmark,
+                "election_weights": weights,
+                "preferred_candidates": pref,
+                "confidence_scores": conf,
+                "precinct_support_draws_path": out_json,
+                "candidate_returns_path": args.candidate_returns,
+                "cvap_columns": {
+                    "HCVAP": "cvap_hisp",
+                    "BCVAP": "cvap_nh_black",
+                    "WCVAP": "cvap_nh_white",
+                    "OCVAP": "cvap_other",
+                },
+            }
+            Path(args.vra_config_json_out).write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            print(f"[ei-king-multi] wrote {args.vra_config_json_out}")
+
     def run_export():
         if args.out_dir:
             export_outputs(con, args.out_dir, fmt=args.export_format)
@@ -172,6 +250,8 @@ def main() -> None:
         run_ensemble()
     if args.stage in ("ei", "all"):
         run_ei()
+    if args.stage in ("ei-king-multi", "all"):
+        run_ei_king_multi()
     if args.stage in ("export", "all"):
         run_export()
 
