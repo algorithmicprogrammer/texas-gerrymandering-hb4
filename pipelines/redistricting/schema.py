@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import pandas as pd
 import duckdb
 from .config import OpportunityDef
@@ -36,7 +37,8 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         year INTEGER,
         office TEXT,
         stage TEXT,
-        notes TEXT
+        notes TEXT,
+        weight DOUBLE DEFAULT 1.0
     );
     """)
 
@@ -50,6 +52,28 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         votes_other BIGINT,
         dem_share DOUBLE,
         PRIMARY KEY (election_id, vtd_geoid)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS election_candidate (
+        election_id TEXT,
+        candidate_id TEXT,
+        candidate_name TEXT,
+        party TEXT,
+        candidate_race TEXT,
+        is_general BOOLEAN,
+        PRIMARY KEY (election_id, candidate_id)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS election_candidate_returns_vtd (
+        election_id TEXT,
+        vtd_geoid TEXT,
+        candidate_id TEXT,
+        votes BIGINT,
+        PRIMARY KEY (election_id, vtd_geoid, candidate_id)
     );
     """)
 
@@ -180,6 +204,17 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
     """)
 
     con.execute("""
+    CREATE TABLE IF NOT EXISTS ensemble_distribution_draws (
+        ensemble_id TEXT,
+        opp_def_id TEXT,
+        metric_name TEXT,
+        plan_id TEXT,
+        metric_value DOUBLE,
+        PRIMARY KEY (ensemble_id, opp_def_id, metric_name, plan_id)
+    );
+    """)
+
+    con.execute("""
     CREATE TABLE IF NOT EXISTS plan_vs_ensemble (
         plan_id TEXT,
         ensemble_id TEXT,
@@ -254,6 +289,28 @@ def create_schema(con: duckdb.DuckDBPyConnection) -> None:
         opportunity_score DOUBLE,
         n_districts BIGINT,
         PRIMARY KEY (ei_run_id, plan_id)
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS ei_multielection_run (
+        ei_run_id TEXT PRIMARY KEY,
+        ensemble_id TEXT,
+        vra_config_json TEXT,
+        model_spec_json TEXT,
+        created_at TEXT
+    );
+    """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS ei_multielection_district (
+        ei_run_id TEXT,
+        plan_id TEXT,
+        district_id TEXT,
+        group_id TEXT,
+        effectiveness_score DOUBLE,
+        is_effective BOOLEAN,
+        PRIMARY KEY (ei_run_id, plan_id, district_id, group_id)
     );
     """)
 
