@@ -40,6 +40,8 @@ from gerrychain.proposals import recom
 from gerrychain.tree import bipartition_tree, recursive_tree_part
 from gerrychain.updaters import Tally, cut_edges
 
+from redistricting.vra import VRAConfig, DistrictEffectivenessModel, VRAConstraint
+
 
 @dataclass
 class RunConfig:
@@ -72,6 +74,7 @@ class RunConfig:
     # Compactness (fast) via cut-edges cap
     enable_cut_edges_cap: bool
     max_cut_edges_factor: float
+    vra_config_json: Optional[Path]
 
 
 def _read_enacted_map(path: Path, vtd_col: str, dist_col: str) -> pd.DataFrame:
@@ -263,6 +266,14 @@ def generate_recom_ensemble(cfg: RunConfig) -> None:
         return len(partition["cut_edges"]) <= max_cut_edges
 
     constraints = [pop_constraint, contiguous]
+
+    if cfg.vra_config_json is not None:
+        vra_cfg = VRAConfig.from_json(cfg.vra_config_json)
+        cvap_lookup = gdf.reset_index(drop=True)[[cfg.vtd_id_col] + [c for c in vra_cfg.cvap_columns.values() if c in gdf.columns]].copy()
+        cvap_lookup = cvap_lookup.rename(columns={cfg.vtd_id_col: "vtd_geoid"})
+        evaluator = DistrictEffectivenessModel(vra_cfg)
+        constraints.append(VRAConstraint(evaluator, cvap_lookup))
+        print(f"[vra] enabled benchmark constraint from {cfg.vra_config_json}")
     if cfg.enable_cut_edges_cap:
         constraints.append(cut_edges_cap_constraint)
         print(
@@ -534,6 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.15,
         help="If enabled, max cut edges allowed = enacted_cut_edges * this factor.",
     )
+    ap.add_argument("--vra-config-json", default=None, help="Optional Brennan-style VRA config JSON")
 
     return ap
 
@@ -564,6 +576,7 @@ def main() -> None:
         bipartition_max_attempts=args.bipartition_max_attempts,
         enable_cut_edges_cap=bool(args.enable_cut_edges_cap),
         max_cut_edges_factor=float(args.max_cut_edges_factor),
+        vra_config_json=(Path(args.vra_config_json) if args.vra_config_json else None),
     )
 
     generate_recom_ensemble(cfg)
