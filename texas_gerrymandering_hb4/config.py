@@ -25,9 +25,6 @@ FIGURES_DIR = REPORTS_DIR / "figures"
 PLANC2333_DIR = RAW_DATA_DIR / "PLANC2333"
 PLANC2333_SHP_FILE = PLANC2333_DIR / "PLANC2333.shp"
 
-GEOSPATIAL_DATA_DIR = PROCESSED_DATA_DIR / "geospatial"
-CLEAN_DISTRICTS_PARQUET = GEOSPATIAL_DATA_DIR / "districts_clean.parquet"
-
 CENSUS_DEMOGRAPHICS_DIR = RAW_DATA_DIR / "tx_pl2020_official"
 CENSUS_DEMOGRAPHICS_TXT = CENSUS_DEMOGRAPHICS_DIR / "Blocks_Pop.txt"
 
@@ -39,18 +36,6 @@ GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
 
 VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
 VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
-
-ELECTION_RETURNS = PROCESSED_DATA_DIR / "election_returns_vtd.parquet"
-ELECTIONS = PROCESSED_DATA_DIR / "elections.parquet"
-GEO_VTD = PROCESSED_DATA_DIR / "geo_vtd.parquet"
-PLAN_DISTRICT_VTD = PROCESSED_DATA_DIR / "plan_district_vtd.parquet"
-PLANS = PROCESSED_DATA_DIR / "plans.parquet"
-
-TABULAR_DATA_DIR = PROCESSED_DATA_DIR / "tabular"
-FINAL_CSV = TABULAR_DATA_DIR / "districts_final.csv"
-
-
-RACE = ["pct_white", "pct_black", "pct_asian", "pct_hispanic"]
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
