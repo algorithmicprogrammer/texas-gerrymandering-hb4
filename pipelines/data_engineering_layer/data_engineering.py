@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE, ACS_CSV_FILE, DEM_PRIMARY_CSV, REP_PRIMARY_CSV
+from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE, ACS_CSV_FILE, DEM_PRIMARY_CSV, REP_PRIMARY_CSV, PROCESSED_DATA_DIR
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -546,7 +546,7 @@ def main() -> None:
         general_returns_csv=Path(GEN_ELECTION_CSV),
         dem_primary_returns_csv=Path(DEM_PRIMARY_CSV),
         rep_primary_returns_csv=Path(REP_PRIMARY_CSV),
-        output_dir=Path("data/processed/analysis_ready"),
+        output_dir=Path(PROCESSED_DATA_DIR),
         output_basename="tx_vtds_analysis_ready",
         target_crs=None,
         use_maup_for_block_to_precinct_assignment=True,
