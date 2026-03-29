@@ -49,8 +49,6 @@ PLANS = PROCESSED_DATA_DIR / "plans.parquet"
 TABULAR_DATA_DIR = PROCESSED_DATA_DIR / "tabular"
 FINAL_CSV = TABULAR_DATA_DIR / "districts_final.csv"
 
-ARTIFACTS_DATA_DIR = DATA_DIR / "artifacts"
-LINEAR_REGRESSION_ARTIFACTS = ARTIFACTS_DATA_DIR / "linear_regression_classifier"
 
 RACE = ["pct_white", "pct_black", "pct_asian", "pct_hispanic"]
 
