@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE, ACS_CSV_FILE, DEM_PRIMARY_CSV, REP_PRIMARY_CSV, PROCESSED_DATA_DIR
+from texas_gerrymandering_hb4.config import (
+    PLANC2333_SHP_FILE,
+    VTDS_SHP_FILE,
+    GEN_ELECTION_CSV,
+    CENSUS_GEO_SHP_FILE,
+    ACS_CSV_FILE,
+    DEM_PRIMARY_CSV,
+    REP_PRIMARY_CSV,
+    PROCESSED_DATA_DIR,
+)
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -39,16 +48,29 @@ class Config:
     write_geopackage: bool = False
     write_csv_without_geometry: bool = True
 
+    # ---------- Diagnostics ----------
+    debug: bool = True
+    fail_on_duplicate_join_matches: bool = True
+
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
 
+def debug_print(config: Config, *args) -> None:
+    if config.debug:
+        print(*args)
+
+
 def normalize_cntyvtd(series: pd.Series) -> pd.Series:
-    """Normalize precinct IDs as left-zero-preserving strings when possible."""
-    # Read through Int64 to avoid 10001.0 style artifacts from CSVs
-    s = pd.to_numeric(series, errors="coerce").astype("Int64").astype(str)
-    s = s.replace("<NA>", pd.NA)
+    """
+    Normalize precinct IDs conservatively.
+
+    This version preserves the original string representation instead of forcing
+    through numeric conversion, which can accidentally collapse distinct IDs.
+    """
+    s = series.astype(str).str.strip()
+    s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
     return s
 
 
@@ -94,21 +116,21 @@ def build_bg_cvap_table(cvap_csv: Path) -> pd.DataFrame:
     CVAP, HCVAP, BCVAP, WCVAP, OCVAP.
 
     Assumptions from slideshow:
-    - lnumber 1 = Total
-    - lnumber 5 = non-Hispanic Black alone
-    - lnumber 7 = non-Hispanic White alone
-    - lnumber 13 = Hispanic or Latino
+    - lnnumber 1 = Total
+    - lnnumber 5 = non-Hispanic Black alone
+    - lnnumber 7 = non-Hispanic White alone
+    - lnnumber 13 = Hispanic or Latino
     - Other = Total - Hispanic - Black - White
     """
-    cvap = pd.read_csv(cvap_csv, dtype={"geoid": str, "lnumber": str, "lntitle": str})
-    required = {"geoid", "lnumber", "cvap_est"}
+    cvap = pd.read_csv(cvap_csv, dtype={"geoid": str, "lnnumber": str, "lntitle": str})
+    required = {"geoid", "lnnumber", "cvap_est"}
     missing = required - set(cvap.columns)
     if missing:
         raise ValueError(f"CVAP CSV missing required columns: {sorted(missing)}")
 
-    cvap = cvap[["geoid", "lnumber", "cvap_est"]].copy()
+    cvap = cvap[["geoid", "lnnumber", "cvap_est"]].copy()
     cvap["geoid"] = cvap["geoid"].astype(str)
-    cvap["lnumber"] = cvap["lnumber"].astype(str).str.strip()
+    cvap["lnnumber"] = cvap["lnnumber"].astype(str).str.strip()
     cvap["cvap_est"] = pd.to_numeric(cvap["cvap_est"], errors="coerce").fillna(0)
 
     # Convert 1500000USsscccttttttb -> sscccttttttb (12-digit BG GEOID)
@@ -117,7 +139,7 @@ def build_bg_cvap_table(cvap_csv: Path) -> pd.DataFrame:
     wide = (
         cvap.pivot_table(
             index="bg_geoid",
-            columns="lnumber",
+            columns="lnnumber",
             values="cvap_est",
             aggfunc="sum",
             fill_value=0,
@@ -185,18 +207,48 @@ def read_geodata(path: Path) -> gpd.GeoDataFrame:
     return gdf
 
 
-def standardize_vtds(vtds: gpd.GeoDataFrame, target_crs: Optional[str] = None) -> gpd.GeoDataFrame:
+def standardize_vtds(
+    vtds: gpd.GeoDataFrame,
+    config: Config,
+    target_crs: Optional[str] = None,
+) -> gpd.GeoDataFrame:
     gdf = vtds.copy()
     if "CNTYVTD" not in gdf.columns:
         raise ValueError("VTD shapefile must contain CNTYVTD.")
 
-    gdf["CNTYVTD"] = normalize_cntyvtd(gdf["CNTYVTD"])
+    raw_ids = gdf["CNTYVTD"].astype(str)
+    norm_ids = normalize_cntyvtd(gdf["CNTYVTD"])
+
+    debug_print(config, "[VTD DIAGNOSTIC] rows:", len(gdf))
+    debug_print(config, "[VTD DIAGNOSTIC] raw unique CNTYVTD:", raw_ids.nunique(dropna=False))
+    debug_print(config, "[VTD DIAGNOSTIC] normalized unique CNTYVTD:", norm_ids.nunique(dropna=False))
+
+    if raw_ids.nunique(dropna=False) != norm_ids.nunique(dropna=False):
+        debug_print(config, "[VTD DIAGNOSTIC] WARNING: normalization changed uniqueness of CNTYVTD values")
+
+    gdf["CNTYVTD"] = norm_ids
+
     if target_crs is not None:
         gdf = gdf.to_crs(target_crs)
-    return gdf[["CNTYVTD", "geometry"]].copy()
+
+    out = gdf[["CNTYVTD", "geometry"]].copy()
+
+    dupes = out[out["CNTYVTD"].duplicated(keep=False)].sort_values("CNTYVTD")
+    debug_print(config, "[VTD DIAGNOSTIC] duplicate CNTYVTD row count after normalization:", len(dupes))
+    if not dupes.empty:
+        debug_print(config, "[VTD DIAGNOSTIC] sample duplicate CNTYVTD values:")
+        debug_print(config, dupes[["CNTYVTD"]].head(20))
+
+    return out
 
 
-def attach_enacted_cd(vtds: gpd.GeoDataFrame, cds: gpd.GeoDataFrame, target_crs: Optional[str] = None) -> gpd.GeoDataFrame:
+
+def attach_enacted_cd(
+    vtds: gpd.GeoDataFrame,
+    cds: gpd.GeoDataFrame,
+    config: Config,
+    target_crs: Optional[str] = None,
+) -> gpd.GeoDataFrame:
     """Attach enacted district assignment to each precinct using representative points."""
     precincts = vtds.copy()
     districts = cds.copy()
@@ -215,6 +267,15 @@ def attach_enacted_cd(vtds: gpd.GeoDataFrame, cds: gpd.GeoDataFrame, target_crs:
     elif precincts.crs is not None and districts.crs != precincts.crs:
         districts = districts.to_crs(precincts.crs)
 
+    debug_print(config, "[CD JOIN DIAGNOSTIC] precinct rows:", len(precincts))
+    debug_print(config, "[CD JOIN DIAGNOSTIC] unique precinct CNTYVTD:", precincts["CNTYVTD"].nunique(dropna=False))
+
+    precinct_dupes = precincts[precincts["CNTYVTD"].duplicated(keep=False)].sort_values("CNTYVTD")
+    debug_print(config, "[CD JOIN DIAGNOSTIC] duplicate precinct CNTYVTD row count:", len(precinct_dupes))
+    if not precinct_dupes.empty:
+        debug_print(config, "[CD JOIN DIAGNOSTIC] sample duplicate precinct CNTYVTD values:")
+        debug_print(config, precinct_dupes[["CNTYVTD"]].head(20))
+
     pts = precincts[["CNTYVTD", "geometry"]].copy()
     pts["geometry"] = pts.representative_point()
 
@@ -223,13 +284,57 @@ def attach_enacted_cd(vtds: gpd.GeoDataFrame, cds: gpd.GeoDataFrame, target_crs:
         districts[[district_col, "geometry"]],
         how="left",
         predicate="within",
-    ).drop(columns=[c for c in ["index_right"] if c in pts.columns or c in []], errors="ignore")
+    )
 
     joined = joined.rename(columns={district_col: "CD"})[["CNTYVTD", "CD"]]
     joined["CD"] = pd.to_numeric(joined["CD"], errors="coerce").astype("Int64")
 
-    out = precincts.merge(joined, on="CNTYVTD", how="left", validate="1:1")
+    debug_print(config, "[CD JOIN DIAGNOSTIC] joined rows:", len(joined))
+    debug_print(config, "[CD JOIN DIAGNOSTIC] unique joined CNTYVTD:", joined["CNTYVTD"].nunique(dropna=False))
+
+    joined_dupes = joined[joined["CNTYVTD"].duplicated(keep=False)].sort_values(["CNTYVTD", "CD"])
+    debug_print(config, "[CD JOIN DIAGNOSTIC] duplicate joined CNTYVTD row count:", len(joined_dupes))
+    if not joined_dupes.empty:
+        debug_print(config, "[CD JOIN DIAGNOSTIC] sample duplicate joined CNTYVTD/CD pairs:")
+        debug_print(config, joined_dupes[["CNTYVTD", "CD"]].head(30))
+
+        cd_counts = (
+            joined.groupby("CNTYVTD")["CD"]
+            .nunique(dropna=True)
+            .reset_index(name="n_cd")
+        )
+        multi_cd = cd_counts[cd_counts["n_cd"] > 1]
+        debug_print(config, "[CD JOIN DIAGNOSTIC] precincts matching multiple distinct CDs:", len(multi_cd))
+        if not multi_cd.empty:
+            debug_print(config, "[CD JOIN DIAGNOSTIC] sample precincts matching multiple CDs:")
+            debug_print(config, multi_cd.head(20))
+
+        if config.fail_on_duplicate_join_matches and not multi_cd.empty:
+            raise ValueError(
+                "Spatial join produced precincts matching multiple congressional districts. "
+                f"Examples: {multi_cd['CNTYVTD'].head(10).tolist()}"
+            )
+
+    # Safe de-duplication when repeated joined rows correspond to the same CD.
+    joined = joined.drop_duplicates(subset=["CNTYVTD", "CD"])
+    joined = joined.drop_duplicates(subset=["CNTYVTD"])
+
+    debug_print(config, "[CD JOIN DIAGNOSTIC] joined rows after dedup:", len(joined))
+    debug_print(config, "[CD JOIN DIAGNOSTIC] unique joined CNTYVTD after dedup:", joined["CNTYVTD"].nunique(dropna=False))
+
+    out = precincts.merge(joined, on="CNTYVTD", how="left")
+
+    debug_print(config, "[CD JOIN DIAGNOSTIC] merged precinct rows:", len(out))
+    debug_print(config, "[CD JOIN DIAGNOSTIC] merged unique CNTYVTD:", out["CNTYVTD"].nunique(dropna=False))
+
+    merged_dupes = out[out["CNTYVTD"].duplicated(keep=False)].sort_values("CNTYVTD")
+    debug_print(config, "[CD JOIN DIAGNOSTIC] duplicate merged CNTYVTD row count:", len(merged_dupes))
+    if not merged_dupes.empty:
+        debug_print(config, "[CD JOIN DIAGNOSTIC] sample duplicate merged rows:")
+        debug_print(config, merged_dupes[["CNTYVTD", "CD"]].head(30))
+
     return out
+
 
 
 def assign_blocks_to_precincts(
@@ -271,6 +376,7 @@ def assign_blocks_to_precincts(
     return blk
 
 
+
 def aggregate_block_demographics_to_precincts(blocks_assigned: gpd.GeoDataFrame) -> pd.DataFrame:
     needed = ["CNTYVTD", "POP20", "CVAP", "HCVAP", "BCVAP", "WCVAP", "OCVAP"]
     missing = [c for c in needed if c not in blocks_assigned.columns]
@@ -307,6 +413,7 @@ def read_election_returns(path: Path) -> pd.DataFrame:
     return out
 
 
+
 def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = df.copy()
     data["office_code"] = data["Office"].map(clean_office_name)
@@ -325,10 +432,7 @@ def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
         .rename_axis(None, axis=1)
     )
 
-    totals = (
-        data.groupby(["cntyvtd", "office_code"], as_index=False)["Votes"]
-        .sum()
-    )
+    totals = data.groupby(["cntyvtd", "office_code"], as_index=False)["Votes"].sum()
     totals["total_col"] = "TOTVOTE_" + totals["office_code"] + "_24G"
     totals_wide = (
         totals.pivot(index="cntyvtd", columns="total_col", values="Votes")
@@ -339,6 +443,7 @@ def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
     )
 
     return candidate_wide, totals_wide
+
 
 
 def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -359,10 +464,7 @@ def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
         .rename_axis(None, axis=1)
     )
 
-    totals = (
-        data.groupby(["cntyvtd", "office_code", "Party"], as_index=False)["Votes"]
-        .sum()
-    )
+    totals = data.groupby(["cntyvtd", "office_code", "Party"], as_index=False)["Votes"].sum()
     totals["total_col"] = "TOTVOTE_" + totals["office_code"] + totals["Party"] + "_24P"
     totals_wide = (
         totals.pivot(index="cntyvtd", columns="total_col", values="Votes")
@@ -373,6 +475,7 @@ def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
     )
 
     return candidate_wide, totals_wide
+
 
 
 def build_primary_combined(dem_df: pd.DataFrame, rep_df: pd.DataFrame) -> pd.DataFrame:
@@ -449,8 +552,8 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     blocks_raw = read_geodata(config.census_blocks_shp)
 
     target_crs = config.target_crs or vtds_raw.crs
-    precincts = standardize_vtds(vtds_raw, target_crs=target_crs)
-    precincts = attach_enacted_cd(precincts, cds_raw, target_crs=target_crs)
+    precincts = standardize_vtds(vtds_raw, config=config, target_crs=target_crs)
+    precincts = attach_enacted_cd(precincts, cds_raw, config=config, target_crs=target_crs)
 
     blocks = blocks_raw.copy()
     if target_crs is not None:
@@ -553,6 +656,8 @@ def main() -> None:
         write_geoparquet=True,
         write_geopackage=False,
         write_csv_without_geometry=True,
+        debug=True,
+        fail_on_duplicate_join_matches=True,
     )
 
     final_gdf = build_analysis_ready_dataset(config)
@@ -567,3 +672,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
