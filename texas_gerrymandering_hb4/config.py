@@ -33,6 +33,7 @@ CENSUS_GEO_SHP_FILE = CENSUS_GEO_DIR / "tl_2020_48_tabblock20.shp"
 
 ELECTION_DATA_DIR = RAW_DATA_DIR / "2024-general-vtds-election-data"
 GEN_ELECTION_CSV = ELECTION_DATA_DIR / "2024_General_Election_Returns.csv"
+DEM_PRIMARY_CSV = EXTERNAL_DATA_DIR/"2024_Democratic_Primary_Election_Returns.csv"
 
 VTDS_GEO_DIR = RAW_DATA_DIR / "vtds_24pg"
 VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
