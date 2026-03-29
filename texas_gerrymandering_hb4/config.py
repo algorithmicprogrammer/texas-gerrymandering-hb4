@@ -42,8 +42,6 @@ VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
 ACS_CSV_DIR = RAW_DATA_DIR / "CVAP_2020-2024_ACS_csv_files"
 ACS_CSV_FILE = ACS_CSV_DIR / "BlockGr.csv"
 
-ANALYSIS_READY
-
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
