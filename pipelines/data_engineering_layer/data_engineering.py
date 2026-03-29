@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE
+from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE, ACS_CSV_FILE
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -539,7 +539,7 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
 
 def main() -> None:
     config = Config(
-        cvap_csv=Path("data/raw/CVAP_2020-2024_ACS_csv_files/BlockGr.csv"),
+        cvap_csv=Path(ACS_CSV_FILE),
         vtd_shp=Path(VTDS_SHP_FILE),
         enacted_cd_shp=Path(PLANC2333_SHP_FILE),
         census_blocks_shp=Path(CENSUS_GEO_SHP_FILE),
