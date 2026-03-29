@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV
+from texas_gerrymandering_hb4.config import PLANC2333_SHP_FILE, VTDS_SHP_FILE, GEN_ELECTION_CSV, CENSUS_GEO_SHP_FILE
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -542,7 +542,7 @@ def main() -> None:
         cvap_csv=Path("data/raw/CVAP_2020-2024_ACS_csv_files/BlockGr.csv"),
         vtd_shp=Path(VTDS_SHP_FILE),
         enacted_cd_shp=Path(PLANC2333_SHP_FILE),
-        census_blocks_shp=Path("data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp"),
+        census_blocks_shp=Path(CENSUS_GEO_SHP_FILE),
         general_returns_csv=Path(GEN_ELECTION_CSV),
         dem_primary_returns_csv=Path("data/raw/2024-general-vtds-election-data/2024_Democratic_Primary_Election_Returns.csv"),
         rep_primary_returns_csv=Path("data/raw/2024-general-vtds-election-data/2024_Republican_Primary_Election_Returns.csv"),
