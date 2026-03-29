@@ -77,10 +77,13 @@ def normalize_cntyvtd(series: pd.Series) -> pd.Series:
 def clean_office_name(value: str) -> str:
     """Map raw office names to compact codes used in final schema."""
     v = str(value).strip().lower()
+
     if v in {"president", "pres"}:
         return "PRES"
+
     if v in {"u.s. sen", "u.s. senate", "us senate", "senate", "u.s sen"}:
         return "SEN"
+
     if v in {
         "rr comm 1",
         "railroad commissioner",
@@ -89,7 +92,8 @@ def clean_office_name(value: str) -> str:
         "rr commissioner",
     }:
         return "RRC"
-    raise ValueError(f"Unrecognized office: {value!r}")
+
+    return None
 
 
 def normalize_candidate_token(name: str) -> str:
@@ -417,6 +421,14 @@ def read_election_returns(path: Path) -> pd.DataFrame:
 def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = df.copy()
     data["office_code"] = data["Office"].map(clean_office_name)
+
+    dropped = data[data["office_code"].isna()]["Office"].drop_duplicates().tolist()
+    if dropped:
+        print("[ELECTION DIAGNOSTIC] Dropping unsupported general-election offices:")
+        print(dropped)
+
+    data = data[data["office_code"].notna()].copy()
+
     data["candidate_token"] = data["Name"].map(normalize_candidate_token)
     data["vote_col"] = data["candidate_token"] + data["Party"] + "_24G"
 
@@ -434,6 +446,7 @@ def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
 
     totals = data.groupby(["cntyvtd", "office_code"], as_index=False)["Votes"].sum()
     totals["total_col"] = "TOTVOTE_" + totals["office_code"] + "_24G"
+
     totals_wide = (
         totals.pivot(index="cntyvtd", columns="total_col", values="Votes")
         .fillna(0)
@@ -449,6 +462,14 @@ def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
 def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = df.copy()
     data["office_code"] = data["Office"].map(clean_office_name)
+
+    dropped = data[data["office_code"].isna()]["Office"].drop_duplicates().tolist()
+    if dropped:
+        print("[ELECTION DIAGNOSTIC] Dropping unsupported primary-election offices:")
+        print(dropped)
+
+    data = data[data["office_code"].notna()].copy()
+
     data["candidate_token"] = data["Name"].map(normalize_candidate_token)
     data["vote_col"] = data["candidate_token"] + data["Party"] + "_24P"
 
@@ -466,6 +487,7 @@ def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
 
     totals = data.groupby(["cntyvtd", "office_code", "Party"], as_index=False)["Votes"].sum()
     totals["total_col"] = "TOTVOTE_" + totals["office_code"] + totals["Party"] + "_24P"
+
     totals_wide = (
         totals.pivot(index="cntyvtd", columns="total_col", values="Votes")
         .fillna(0)
