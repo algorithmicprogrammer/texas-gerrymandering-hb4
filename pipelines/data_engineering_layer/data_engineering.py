@@ -25,6 +25,12 @@ try:
 except ImportError:  # pragma: no cover
     maup = None
 
+try:
+    from shapely.validation import make_valid  # type: ignore
+    HAS_MAKE_VALID = True
+except ImportError:  # pragma: no cover
+    HAS_MAKE_VALID = False
+
 
 @dataclass
 class Config:
@@ -74,7 +80,7 @@ def normalize_cntyvtd(series: pd.Series) -> pd.Series:
     return s
 
 
-def clean_office_name(value: str) -> str:
+def clean_office_name(value: str) -> str | None:
     """Map raw office names to compact codes used in final schema."""
     v = str(value).strip().lower()
 
@@ -108,6 +114,62 @@ def normalize_candidate_token(name: str) -> str:
 
 def safe_make_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def repair_invalid_geometries(
+    gdf: gpd.GeoDataFrame,
+    config: Config,
+    label: str,
+) -> gpd.GeoDataFrame:
+    """
+    Repair invalid geometries before any spatial operations.
+
+    Strategy:
+    1. Prefer shapely.validation.make_valid if available
+    2. Fall back to buffer(0)
+    3. Apply a second buffer(0) pass only to any geometries still invalid
+    """
+    out = gdf.copy()
+
+    if out.geometry.isna().any():
+        n_missing = int(out.geometry.isna().sum())
+        raise ValueError(f"{label} contains {n_missing} missing geometries.")
+
+    invalid_mask = ~out.is_valid
+    n_invalid = int(invalid_mask.sum())
+    debug_print(config, f"[GEOMETRY DIAGNOSTIC] {label} invalid before repair:", n_invalid)
+
+    if n_invalid == 0:
+        return out
+
+    if HAS_MAKE_VALID:
+        out.loc[invalid_mask, "geometry"] = out.loc[invalid_mask, "geometry"].apply(make_valid)
+    else:
+        out.loc[invalid_mask, "geometry"] = out.loc[invalid_mask, "geometry"].buffer(0)
+
+    invalid_mask = ~out.is_valid
+    n_invalid_after_first = int(invalid_mask.sum())
+    debug_print(
+        config,
+        f"[GEOMETRY DIAGNOSTIC] {label} invalid after first repair pass:",
+        n_invalid_after_first,
+    )
+
+    if n_invalid_after_first > 0:
+        out.loc[invalid_mask, "geometry"] = out.loc[invalid_mask, "geometry"].buffer(0)
+
+    invalid_mask = ~out.is_valid
+    n_invalid_final = int(invalid_mask.sum())
+    debug_print(config, f"[GEOMETRY DIAGNOSTIC] {label} invalid after final repair:", n_invalid_final)
+
+    if n_invalid_final > 0:
+        bad_ids = list(out.index[invalid_mask][:10])
+        raise ValueError(
+            f"{label} still has {n_invalid_final} invalid geometries after repair. "
+            f"Sample row indices: {bad_ids}"
+        )
+
+    return out
 
 
 # -----------------------------------------------------------------------------
@@ -246,7 +308,6 @@ def standardize_vtds(
     return out
 
 
-
 def attach_enacted_cd(
     vtds: gpd.GeoDataFrame,
     cds: gpd.GeoDataFrame,
@@ -340,7 +401,6 @@ def attach_enacted_cd(
     return out
 
 
-
 def assign_blocks_to_precincts(
     blocks: gpd.GeoDataFrame,
     precincts: gpd.GeoDataFrame,
@@ -380,7 +440,6 @@ def assign_blocks_to_precincts(
     return blk
 
 
-
 def aggregate_block_demographics_to_precincts(blocks_assigned: gpd.GeoDataFrame) -> pd.DataFrame:
     needed = ["CNTYVTD", "POP20", "CVAP", "HCVAP", "BCVAP", "WCVAP", "OCVAP"]
     missing = [c for c in needed if c not in blocks_assigned.columns]
@@ -415,7 +474,6 @@ def read_election_returns(path: Path) -> pd.DataFrame:
     out["Party"] = out["Party"].astype(str).str.strip().str.upper()
     out["Votes"] = pd.to_numeric(out["Votes"], errors="coerce").fillna(0).astype(int)
     return out
-
 
 
 def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -458,7 +516,6 @@ def build_wide_votes_general(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
     return candidate_wide, totals_wide
 
 
-
 def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
     data = df.copy()
     data["office_code"] = data["Office"].map(clean_office_name)
@@ -499,7 +556,6 @@ def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
     return candidate_wide, totals_wide
 
 
-
 def build_primary_combined(dem_df: pd.DataFrame, rep_df: pd.DataFrame) -> pd.DataFrame:
     # Safe even if files already have Party=D or Party=R.
     dem = dem_df.copy()
@@ -535,6 +591,13 @@ def validate_final_dataset(final_gdf: gpd.GeoDataFrame) -> None:
         dupes = final_gdf.loc[final_gdf["CNTYVTD"].duplicated(), "CNTYVTD"].tolist()[:10]
         raise ValueError(f"Duplicate CNTYVTD values in final dataset, e.g. {dupes}")
 
+    if final_gdf.geometry.isna().any():
+        raise ValueError("Missing geometry values in final dataset.")
+
+    invalid_count = int((~final_gdf.is_valid).sum())
+    if invalid_count > 0:
+        raise ValueError(f"Final dataset contains {invalid_count} invalid geometries.")
+
     for col in ["TOTALPOP", "CVAP", "HCVAP", "BCVAP", "WCVAP", "OCVAP"]:
         if (final_gdf[col] < 0).any():
             raise ValueError(f"Negative values detected in {col}")
@@ -543,7 +606,6 @@ def validate_final_dataset(final_gdf: gpd.GeoDataFrame) -> None:
     if not np.allclose(final_gdf["CVAP"].fillna(0), cvap_sum.fillna(0), atol=1e-6):
         max_diff = (final_gdf["CVAP"] - cvap_sum).abs().max()
         raise ValueError(f"CVAP != HCVAP+BCVAP+WCVAP+OCVAP for some rows; max diff = {max_diff}")
-
 
 
 def write_outputs(final_gdf: gpd.GeoDataFrame, config: Config) -> None:
@@ -572,6 +634,11 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     vtds_raw = read_geodata(config.vtd_shp)
     cds_raw = read_geodata(config.enacted_cd_shp)
     blocks_raw = read_geodata(config.census_blocks_shp)
+
+    # 1a) Repair invalid geometries as early as possible
+    vtds_raw = repair_invalid_geometries(vtds_raw, config, label="VTD shapefile")
+    cds_raw = repair_invalid_geometries(cds_raw, config, label="Congressional district shapefile")
+    blocks_raw = repair_invalid_geometries(blocks_raw, config, label="Census block shapefile")
 
     target_crs = config.target_crs or vtds_raw.crs
     precincts = standardize_vtds(vtds_raw, config=config, target_crs=target_crs)
@@ -652,6 +719,9 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     ]
     final_gdf = final_gdf[ordered].copy()
 
+    # 9a) Repair final geometry one more time defensively after all spatial work
+    final_gdf = repair_invalid_geometries(final_gdf, config, label="Final analysis-ready dataset")
+
     # 10) Validate
     validate_final_dataset(final_gdf)
 
@@ -689,9 +759,9 @@ def main() -> None:
     print(final_gdf.head())
     print(f"Rows: {len(final_gdf):,}")
     print(f"Columns: {len(final_gdf.columns):,}")
+    print("Invalid geometries in final dataset:", int((~final_gdf.is_valid).sum()))
     print("Output directory:", config.output_dir)
 
 
 if __name__ == "__main__":
     main()
-
