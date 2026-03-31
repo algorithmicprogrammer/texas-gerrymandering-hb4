@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-# Optional but recommended for polygon-to-polygon assignment
 try:
     import maup  # type: ignore
 except ImportError:  # pragma: no cover
@@ -34,7 +33,6 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class Config:
-    # ---------- Raw inputs ----------
     cvap_csv: Path
     vtd_shp: Path
     enacted_cd_shp: Path
@@ -43,20 +41,19 @@ class Config:
     dem_primary_returns_csv: Path
     rep_primary_returns_csv: Path
 
-    # ---------- Outputs ----------
     output_dir: Path
     output_basename: str = "tx_precincts_analysis_ready"
 
-    # ---------- CRS / behavior ----------
-    target_crs: Optional[str] = None  # e.g. "EPSG:3083" or None to use VTD CRS
+    target_crs: Optional[str] = None
     use_maup_for_block_to_precinct_assignment: bool = True
     write_geoparquet: bool = True
     write_geopackage: bool = False
     write_csv_without_geometry: bool = True
 
-    # ---------- Diagnostics ----------
     debug: bool = True
     fail_on_duplicate_join_matches: bool = True
+    min_expected_general_match_rate: float = 0.95
+    min_expected_primary_match_rate: float = 0.95
 
 
 # -----------------------------------------------------------------------------
@@ -70,18 +67,40 @@ def debug_print(config: Config, *args) -> None:
 
 def normalize_cntyvtd(series: pd.Series) -> pd.Series:
     """
-    Normalize precinct IDs conservatively.
+    Conservative CNTYVTD normalization.
 
-    This version preserves the original string representation instead of forcing
-    through numeric conversion, which can accidentally collapse distinct IDs.
+    Keeps alphanumeric VTD suffixes intact, strips whitespace, uppercases, and
+    removes a trailing '.0' artifact if one was introduced by CSV parsing.
     """
-    s = series.astype(str).str.strip()
-    s = s.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
+    s = series.astype(str).str.strip().str.upper()
+    s = s.str.replace(r"\.0$", "", regex=True)
+    s = s.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA, "<NA>": pd.NA})
     return s
 
 
-def clean_office_name(value: str) -> str | None:
-    """Map raw office names to compact codes used in final schema."""
+def build_cntyvtd_from_county_and_vtd(
+    county_series: pd.Series,
+    vtd_series: pd.Series,
+) -> pd.Series:
+    """
+    Build join key as county FIPS + VTD, preserving VTD leading zeros/suffixes.
+
+    Based on the slideshow, election cntyvtd is FIPS + VTD, so the shapefile key
+    should be rebuilt from CNTY + VTD rather than using the shapefile CNTYVTD as-is.
+    """
+    county = pd.to_numeric(county_series, errors="coerce").astype("Int64").astype(str)
+    county = county.replace("<NA>", pd.NA)
+
+    vtd = vtd_series.astype(str).str.strip().str.upper()
+    vtd = vtd.str.replace(r"\.0$", "", regex=True)
+    vtd = vtd.replace({"": pd.NA, "NAN": pd.NA, "NONE": pd.NA, "<NA>": pd.NA})
+
+    out = county + vtd
+    out = out.where(county.notna() & vtd.notna(), pd.NA)
+    return out
+
+
+def clean_office_name(value: str) -> Optional[str]:
     v = str(value).strip().lower()
 
     if v in {"president", "pres"}:
@@ -103,7 +122,6 @@ def clean_office_name(value: str) -> str | None:
 
 
 def normalize_candidate_token(name: str) -> str:
-    """Make a compact candidate token for wide vote columns like TrumpR_24G."""
     token = str(name).strip()
     token = token.replace(" ", "")
     token = token.replace("-", "")
@@ -121,14 +139,6 @@ def repair_invalid_geometries(
     config: Config,
     label: str,
 ) -> gpd.GeoDataFrame:
-    """
-    Repair invalid geometries before any spatial operations.
-
-    Strategy:
-    1. Prefer shapely.validation.make_valid if available
-    2. Fall back to buffer(0)
-    3. Apply a second buffer(0) pass only to any geometries still invalid
-    """
     out = gdf.copy()
 
     if out.geometry.isna().any():
@@ -149,11 +159,7 @@ def repair_invalid_geometries(
 
     invalid_mask = ~out.is_valid
     n_invalid_after_first = int(invalid_mask.sum())
-    debug_print(
-        config,
-        f"[GEOMETRY DIAGNOSTIC] {label} invalid after first repair pass:",
-        n_invalid_after_first,
-    )
+    debug_print(config, f"[GEOMETRY DIAGNOSTIC] {label} invalid after first repair pass:", n_invalid_after_first)
 
     if n_invalid_after_first > 0:
         out.loc[invalid_mask, "geometry"] = out.loc[invalid_mask, "geometry"].buffer(0)
@@ -177,17 +183,6 @@ def repair_invalid_geometries(
 # -----------------------------------------------------------------------------
 
 def build_bg_cvap_table(cvap_csv: Path) -> pd.DataFrame:
-    """
-    Build one row per census block group with simplified CVAP fields:
-    CVAP, HCVAP, BCVAP, WCVAP, OCVAP.
-
-    Assumptions from slideshow:
-    - lnnumber 1 = Total
-    - lnnumber 5 = non-Hispanic Black alone
-    - lnnumber 7 = non-Hispanic White alone
-    - lnnumber 13 = Hispanic or Latino
-    - Other = Total - Hispanic - Black - White
-    """
     cvap = pd.read_csv(cvap_csv, dtype={"geoid": str, "lnnumber": str, "lntitle": str})
     required = {"geoid", "lnnumber", "cvap_est"}
     missing = required - set(cvap.columns)
@@ -199,7 +194,6 @@ def build_bg_cvap_table(cvap_csv: Path) -> pd.DataFrame:
     cvap["lnnumber"] = cvap["lnnumber"].astype(str).str.strip()
     cvap["cvap_est"] = pd.to_numeric(cvap["cvap_est"], errors="coerce").fillna(0)
 
-    # Convert 1500000USsscccttttttb -> sscccttttttb (12-digit BG GEOID)
     cvap["bg_geoid"] = cvap["geoid"].str.replace("1500000US", "", regex=False)
 
     wide = (
@@ -232,11 +226,6 @@ def build_bg_cvap_table(cvap_csv: Path) -> pd.DataFrame:
 
 
 def allocate_bg_cvap_to_blocks(blocks_gdf: gpd.GeoDataFrame, bg_cvap: pd.DataFrame) -> gpd.GeoDataFrame:
-    """
-    Allocate BG-level CVAP to blocks by POP20 shares within each BG.
-
-    This works because blocks are nested within block groups.
-    """
     blocks = blocks_gdf.copy()
     if "GEOID20" not in blocks.columns or "POP20" not in blocks.columns:
         raise ValueError("Block shapefile must contain GEOID20 and POP20 columns.")
@@ -252,7 +241,6 @@ def allocate_bg_cvap_to_blocks(blocks_gdf: gpd.GeoDataFrame, bg_cvap: pd.DataFra
     bg_pop = blocks.groupby("bg_geoid", dropna=False)["POP20"].transform("sum")
     n_blocks = blocks.groupby("bg_geoid", dropna=False)["GEOID20"].transform("count")
 
-    # If a BG has zero POP20 across all blocks, split evenly across its blocks.
     weight = np.where(bg_pop > 0, blocks["POP20"] / bg_pop, 1 / n_blocks)
     blocks["alloc_weight"] = weight
 
@@ -279,20 +267,23 @@ def standardize_vtds(
     target_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     gdf = vtds.copy()
-    if "CNTYVTD" not in gdf.columns:
-        raise ValueError("VTD shapefile must contain CNTYVTD.")
 
-    raw_ids = gdf["CNTYVTD"].astype(str)
-    norm_ids = normalize_cntyvtd(gdf["CNTYVTD"])
+    required_cols = {"CNTY", "VTD", "geometry"}
+    missing = required_cols - set(gdf.columns)
+    if missing:
+        raise ValueError(f"VTD shapefile missing required columns for rebuilt join key: {sorted(missing)}")
+
+    raw_shapefile_cntyvtd = gdf["CNTYVTD"].astype(str) if "CNTYVTD" in gdf.columns else pd.Series(dtype=str)
+
+    rebuilt_ids = build_cntyvtd_from_county_and_vtd(gdf["CNTY"], gdf["VTD"])
+    rebuilt_ids = normalize_cntyvtd(rebuilt_ids)
 
     debug_print(config, "[VTD DIAGNOSTIC] rows:", len(gdf))
-    debug_print(config, "[VTD DIAGNOSTIC] raw unique CNTYVTD:", raw_ids.nunique(dropna=False))
-    debug_print(config, "[VTD DIAGNOSTIC] normalized unique CNTYVTD:", norm_ids.nunique(dropna=False))
+    if "CNTYVTD" in gdf.columns:
+        debug_print(config, "[VTD DIAGNOSTIC] raw shapefile CNTYVTD unique:", raw_shapefile_cntyvtd.nunique(dropna=False))
+    debug_print(config, "[VTD DIAGNOSTIC] rebuilt CNTY+VTD unique:", rebuilt_ids.nunique(dropna=False))
 
-    if raw_ids.nunique(dropna=False) != norm_ids.nunique(dropna=False):
-        debug_print(config, "[VTD DIAGNOSTIC] WARNING: normalization changed uniqueness of CNTYVTD values")
-
-    gdf["CNTYVTD"] = norm_ids
+    gdf["CNTYVTD"] = rebuilt_ids
 
     if target_crs is not None:
         gdf = gdf.to_crs(target_crs)
@@ -300,10 +291,15 @@ def standardize_vtds(
     out = gdf[["CNTYVTD", "geometry"]].copy()
 
     dupes = out[out["CNTYVTD"].duplicated(keep=False)].sort_values("CNTYVTD")
-    debug_print(config, "[VTD DIAGNOSTIC] duplicate CNTYVTD row count after normalization:", len(dupes))
+    debug_print(config, "[VTD DIAGNOSTIC] duplicate CNTYVTD row count after rebuild:", len(dupes))
     if not dupes.empty:
-        debug_print(config, "[VTD DIAGNOSTIC] sample duplicate CNTYVTD values:")
+        debug_print(config, "[VTD DIAGNOSTIC] sample duplicate CNTYVTD values after rebuild:")
         debug_print(config, dupes[["CNTYVTD"]].head(20))
+
+    missing_key_rows = int(out["CNTYVTD"].isna().sum())
+    debug_print(config, "[VTD DIAGNOSTIC] missing rebuilt CNTYVTD rows:", missing_key_rows)
+    if missing_key_rows > 0:
+        raise ValueError(f"Shapefile has {missing_key_rows} rows with missing rebuilt CNTYVTD values.")
 
     return out
 
@@ -314,7 +310,6 @@ def attach_enacted_cd(
     config: Config,
     target_crs: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
-    """Attach enacted district assignment to each precinct using representative points."""
     precincts = vtds.copy()
     districts = cds.copy()
 
@@ -380,7 +375,6 @@ def attach_enacted_cd(
                 f"Examples: {multi_cd['CNTYVTD'].head(10).tolist()}"
             )
 
-    # Safe de-duplication when repeated joined rows correspond to the same CD.
     joined = joined.drop_duplicates(subset=["CNTYVTD", "CD"])
     joined = joined.drop_duplicates(subset=["CNTYVTD"])
 
@@ -406,12 +400,6 @@ def assign_blocks_to_precincts(
     precincts: gpd.GeoDataFrame,
     use_maup: bool = True,
 ) -> gpd.GeoDataFrame:
-    """
-    Assign each block to a precinct.
-
-    Preferred: maup.assign(blocks, precincts)
-    Fallback: representative-point spatial join.
-    """
     blk = blocks.copy()
     pct = precincts.copy()
 
@@ -473,6 +461,11 @@ def read_election_returns(path: Path) -> pd.DataFrame:
     out["Name"] = out["Name"].astype(str).str.strip()
     out["Party"] = out["Party"].astype(str).str.strip().str.upper()
     out["Votes"] = pd.to_numeric(out["Votes"], errors="coerce").fillna(0).astype(int)
+
+    missing_keys = int(out["cntyvtd"].isna().sum())
+    if missing_keys > 0:
+        raise ValueError(f"Election file {path} has {missing_keys} missing cntyvtd values.")
+
     return out
 
 
@@ -557,12 +550,39 @@ def build_wide_votes_primary(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFra
 
 
 def build_primary_combined(dem_df: pd.DataFrame, rep_df: pd.DataFrame) -> pd.DataFrame:
-    # Safe even if files already have Party=D or Party=R.
     dem = dem_df.copy()
     rep = rep_df.copy()
     dem["Party"] = "D"
     rep["Party"] = "R"
     return pd.concat([dem, rep], ignore_index=True)
+
+
+def check_election_join_coverage(
+    precincts: gpd.GeoDataFrame,
+    election_df: pd.DataFrame,
+    key_left: str,
+    key_right: str,
+    label: str,
+    min_expected_match_rate: float,
+) -> None:
+    left_ids = set(precincts[key_left].dropna().astype(str))
+    right_ids = set(election_df[key_right].dropna().astype(str))
+    matched = left_ids & right_ids
+    match_rate = len(matched) / max(len(left_ids), 1)
+
+    print(f"[ELECTION MATCH DIAGNOSTIC] {label} precinct keys: {len(left_ids)}")
+    print(f"[ELECTION MATCH DIAGNOSTIC] {label} election keys: {len(right_ids)}")
+    print(f"[ELECTION MATCH DIAGNOSTIC] {label} matched keys: {len(matched)}")
+    print(f"[ELECTION MATCH DIAGNOSTIC] {label} match rate: {match_rate:.4f}")
+
+    if match_rate < min_expected_match_rate:
+        only_left = list(sorted(left_ids - right_ids))[:10]
+        only_right = list(sorted(right_ids - left_ids))[:10]
+        raise ValueError(
+            f"{label} election join coverage is too low ({match_rate:.4f}). "
+            f"Sample keys only in precincts: {only_left}. "
+            f"Sample keys only in election data: {only_right}."
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -630,12 +650,10 @@ def write_outputs(final_gdf: gpd.GeoDataFrame, config: Config) -> None:
 # -----------------------------------------------------------------------------
 
 def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
-    # 1) Read geographic files
     vtds_raw = read_geodata(config.vtd_shp)
     cds_raw = read_geodata(config.enacted_cd_shp)
     blocks_raw = read_geodata(config.census_blocks_shp)
 
-    # 1a) Repair invalid geometries as early as possible
     vtds_raw = repair_invalid_geometries(vtds_raw, config, label="VTD shapefile")
     cds_raw = repair_invalid_geometries(cds_raw, config, label="Congressional district shapefile")
     blocks_raw = repair_invalid_geometries(blocks_raw, config, label="Census block shapefile")
@@ -648,11 +666,9 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     if target_crs is not None:
         blocks = blocks.to_crs(target_crs)
 
-    # 2) Build BG CVAP table and allocate to blocks
     bg_cvap = build_bg_cvap_table(config.cvap_csv)
     blocks = allocate_bg_cvap_to_blocks(blocks, bg_cvap)
 
-    # 3) Assign blocks to precincts and aggregate demographics up to precincts
     blocks = assign_blocks_to_precincts(
         blocks,
         precincts,
@@ -664,19 +680,31 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     for col in ["TOTALPOP", "CVAP", "HCVAP", "BCVAP", "WCVAP", "OCVAP"]:
         precincts[col] = pd.to_numeric(precincts[col], errors="coerce").fillna(0).astype(float)
 
-    # 4) Read election returns
     general = read_election_returns(config.general_returns_csv)
     dem_primary = read_election_returns(config.dem_primary_returns_csv)
     rep_primary = read_election_returns(config.rep_primary_returns_csv)
     primary = build_primary_combined(dem_primary, rep_primary)
 
-    # 5) General wide votes + totals
-    general_votes, general_totals = build_wide_votes_general(general)
+    check_election_join_coverage(
+        precincts=precincts,
+        election_df=general,
+        key_left="CNTYVTD",
+        key_right="cntyvtd",
+        label="GENERAL",
+        min_expected_match_rate=config.min_expected_general_match_rate,
+    )
+    check_election_join_coverage(
+        precincts=precincts,
+        election_df=primary,
+        key_left="CNTYVTD",
+        key_right="cntyvtd",
+        label="PRIMARY",
+        min_expected_match_rate=config.min_expected_primary_match_rate,
+    )
 
-    # 6) Primary wide votes + totals
+    general_votes, general_totals = build_wide_votes_general(general)
     primary_votes, primary_totals = build_wide_votes_primary(primary)
 
-    # 7) Merge election tables into precincts
     final_gdf = precincts.merge(general_votes, left_on="CNTYVTD", right_on="cntyvtd", how="left")
     if "cntyvtd" in final_gdf.columns:
         final_gdf = final_gdf.drop(columns=["cntyvtd"])
@@ -693,7 +721,6 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     if "cntyvtd" in final_gdf.columns:
         final_gdf = final_gdf.drop(columns=["cntyvtd"])
 
-    # 8) Fill vote/totals missing values with 0 and coerce integer type
     non_geo_cols = [c for c in final_gdf.columns if c != "geometry"]
     vote_like = [
         c for c in non_geo_cols
@@ -702,7 +729,6 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     for col in vote_like:
         final_gdf[col] = pd.to_numeric(final_gdf[col], errors="coerce").fillna(0).astype(int)
 
-    # 9) Put important columns first
     preferred_prefix = [
         "CNTYVTD",
         "geometry",
@@ -719,18 +745,11 @@ def build_analysis_ready_dataset(config: Config) -> gpd.GeoDataFrame:
     ]
     final_gdf = final_gdf[ordered].copy()
 
-    # 9a) Repair final geometry one more time defensively after all spatial work
     final_gdf = repair_invalid_geometries(final_gdf, config, label="Final analysis-ready dataset")
-
-    # 10) Validate
     validate_final_dataset(final_gdf)
 
     return final_gdf
 
-
-# -----------------------------------------------------------------------------
-# Example runner
-# -----------------------------------------------------------------------------
 
 def main() -> None:
     config = Config(
@@ -750,6 +769,8 @@ def main() -> None:
         write_csv_without_geometry=True,
         debug=True,
         fail_on_duplicate_join_matches=True,
+        min_expected_general_match_rate=0.95,
+        min_expected_primary_match_rate=0.95,
     )
 
     final_gdf = build_analysis_ready_dataset(config)
