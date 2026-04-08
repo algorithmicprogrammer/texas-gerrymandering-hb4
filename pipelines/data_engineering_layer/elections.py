@@ -123,11 +123,13 @@ TOTALS_SPEC = {
 
 
 def _normalize_cntyvtd(df: pd.DataFrame) -> pd.DataFrame:
-    """Build the cntyvtd join key from FIPS + VTD, matching the VTD shapefile."""
+    """Build the cntyvtd join key from fips + vtd, matching the VTD shapefile.
+    Column names are already lowercased by _pivot_election before this is called.
+    """
     df = df.copy()
-    df["FIPS"] = df["FIPS"].astype(str).str.strip().str.zfill(3)
-    df["VTD"]  = df["VTD"].astype(str).str.strip()
-    df["CNTYVTD"] = df["FIPS"] + df["VTD"]
+    df["fips"] = df["fips"].astype(str).str.strip().str.zfill(3)
+    df["vtd"]  = df["vtd"].astype(str).str.strip()
+    df["CNTYVTD"] = df["fips"] + df["vtd"]
     return df
 
 
