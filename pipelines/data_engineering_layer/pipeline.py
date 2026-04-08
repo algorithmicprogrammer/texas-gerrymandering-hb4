@@ -34,40 +34,44 @@ from join import assemble_final_dataset
 from validate import run_all_validations
 from schema import enforce_schema, compute_derived_columns
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-log = logging.getLogger(__name__)
-
-
 # ---------------------------------------------------------------------------
 # Path configuration – edit these to match your directory layout
 # ---------------------------------------------------------------------------
-RAW = Path("data/raw")
-OUT = Path("data/processed")
+from texas_gerrymandering_hb4.config import (
+    PROCESSED_DATA_DIR,
+    CENSUS_DEMOGRAPHICS_PL,
+    CENSUS_DEMOGRAPHICS_GEOHEADER,
+    ACS_CSV_FILE,
+    VTDS_SHP_FILE,
+    PLANC2333_SHP_FILE,
+    CENSUS_GEO_SHP_FILE,
+    GEN_ELECTION_CSV,
+    DEM_PRIMARY_CSV,
+    REP_PRIMARY_CSV,
+)
+
+OUT = PROCESSED_DATA_DIR
 OUT.mkdir(parents=True, exist_ok=True)
 
 PATHS = {
     # Source 1 – PL 94-171 data segment
-    "pl_data": RAW / "tx_pl2020/tx000022020.pl",
+    "pl_data": CENSUS_DEMOGRAPHICS_PL,
     # Source 2 – PL 94-171 geo header
-    "pl_geo": RAW / "tx_pl2020/txgeo2020.pl",
+    "pl_geo": CENSUS_DEMOGRAPHICS_GEOHEADER,
     # Source 3 – ACS 5-year CVAP special tabulation (tract level)
-    "acs_cvap": RAW / "CVAP_2020-2024_ACS_csv_files/Tract.csv",
+    "acs_cvap": ACS_CSV_FILE,
     # Source 4 – 2024 primary + general VTD shapefile (geometry + CNTYKEY)
-    "vtd_shp": RAW / "vtds_24pg/VTDs_24PG.shp",
+    "vtd_shp": VTDS_SHP_FILE,
     # Source 5 – PLANC2333 enacted congressional district shapefile
-    "planc": RAW / "PLANC2333/PLANC2333.shp",
+    "planc": PLANC2333_SHP_FILE,
     # Source 6 – TIGER/LINE 2020 Census block shapefile
-    "blocks_shp": RAW / "tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp",
+    "blocks_shp": CENSUS_GEO_SHP_FILE,
     # Source 7 – 2024 general election returns (VTD-level CSV)
-    "gen_returns": RAW / "2024-general-vtds-election-data/2024_General_Election_Returns.csv",
+    "gen_returns": GEN_ELECTION_CSV,
     # Source 8 – 2024 Democratic primary returns
-    "dem_primary": RAW / "2024-general-vtds-election-data/2024_Democratic_Primary_Election_Returns.csv",
+    "dem_primary": DEM_PRIMARY_CSV,
     # Source 9 – 2024 Republican primary returns
-    "rep_primary": RAW / "2024-general-vtds-election-data/2024_Republican_Primary_Election_Returns.csv",
+    "rep_primary": REP_PRIMARY_CSV,
 }
 
 # MGGG discounting: use state-level citizenship rate when tract VAP < this
