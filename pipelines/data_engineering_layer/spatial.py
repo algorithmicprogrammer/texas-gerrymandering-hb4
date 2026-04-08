@@ -109,7 +109,8 @@ def spatial_crosswalk_blocks_to_vtd(
     aggregated demographic columns.
     """
     # --- Fix and reproject geometries ---
-    blocks_geo = _fix_geometry(blocks_shp[["GEOID20", "geometry"]].copy(), "Census blocks")
+    # Keep POP20 alongside geometry so it survives into the intersection
+    blocks_geo = _fix_geometry(blocks_shp[["GEOID20", "POP20", "geometry"]].copy(), "Census blocks")
     vtd_geo    = _fix_geometry(vtd_shp.copy(), "VTDs")
 
     blocks_geo = blocks_geo.to_crs(tx_crs)

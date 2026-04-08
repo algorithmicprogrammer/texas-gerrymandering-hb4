@@ -60,7 +60,7 @@ def _parse_geo_header(path: str, block_sumlev: str = "750") -> pd.DataFrame:
             tract_geoid = state + county + tract   # 11-digit tract GEOID
 
             records.append({
-                "LOGRECNO":   line[18:25].strip(),
+                "LOGRECNO": line[18:25].strip().zfill(7),
                 "GEOID20":    bare_geoid,
                 "tract_geoid": tract_geoid,
             })
@@ -99,13 +99,14 @@ def _parse_pl_data_segment(path: str, logrecnos: set) -> pd.DataFrame:
             parts = line.rstrip("\n").split("|")
             if len(parts) < 152:
                 continue
-            logrecno = parts[4].strip()
+            logrecno = parts[4].strip().zfill(7)
             if logrecno not in logrecnos:
                 continue
             chunks.append(parts[:152])
 
     df = pd.DataFrame(chunks, columns=col_names)
-    df["LOGRECNO"] = df["LOGRECNO"].str.strip()
+    # Re-apply zfill after strip so LOGRECNO matches the geo header keys
+    df["LOGRECNO"] = df["LOGRECNO"].str.strip().str.zfill(7)
 
     # Cast numeric columns
     numeric_cols = p3_names + p4_names + h1_names
@@ -179,8 +180,8 @@ def load_all_sources(paths: dict, block_sumlev: str = "750") -> dict:
     acs_cvap = _load_acs_cvap(str(paths["acs_cvap"]))
 
     log.info("Loading TIGER/LINE Census block shapefile …")
-    blocks_shp = gpd.read_file(str(paths["blocks_shp"]),
-                               columns=["GEOID20", "POP20", "geometry"])
+    blocks_shp = gpd.read_file(str(paths["blocks_shp"]))
+    blocks_shp = blocks_shp[["GEOID20", "POP20", "geometry"]]
     blocks_shp["GEOID20"] = blocks_shp["GEOID20"].str.strip()
     log.info(f"  Census block geometries: {len(blocks_shp):,} rows")
 
