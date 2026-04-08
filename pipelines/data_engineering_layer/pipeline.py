@@ -163,9 +163,9 @@ def run_pipeline():
     # ------------------------------------------------------------------
     # 10. Output
     # ------------------------------------------------------------------
-    out_path = OUT / "tx_precincts_final.gpkg"
+    out_path = OUT / "tx_precincts_final.parquet"
     log.info(f"Step 10 — Writing output to {out_path}")
-    final.to_file(out_path, driver="GPKG", layer="precincts")
+    final.to_parquet(out_path, index=False)
 
     log.info("=== Pipeline complete ===")
     return final
