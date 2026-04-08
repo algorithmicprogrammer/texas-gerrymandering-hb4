@@ -35,33 +35,40 @@ GEO_HEADER_FIELDS = {
 
 def _parse_geo_header(path: str, block_sumlev: str = "750") -> pd.DataFrame:
     """
-    Parse the fixed-width PL 94-171 geo header file.
+    Parse the pipe-delimited PL 94-171 geo header file (txgeo2020.pl).
 
-    Returns a DataFrame with one row per Census block (SUMLEV == block_sumlev)
-    containing LOGRECNO, GEOID20 (bare 15-digit block FIPS), and tract GEOID.
+    Field layout (0-indexed pipe-split):
+      [2]  SUMLEV   — summary level code; "750" = Census block
+      [7]  LOGRECNO — 7-digit record number joining to tx000022020.pl
+      [8]  GEOID    — full GEOID with prefix, e.g. "7500000US482010001001000"
+
+    GEOID20 (bare 15-digit block FIPS) is extracted by stripping the
+    "7500000US" prefix.  The 11-digit tract GEOID is the first 11 digits
+    of GEOID20 (state[2] + county[3] + tract[6]).
     """
     records = []
     with open(path, encoding="latin-1") as fh:
         for line in fh:
-            if len(line) < 85:
+            parts = line.rstrip("\n").split("|")
+            if len(parts) < 9:
                 continue
-            sumlev = line[8:11].strip()
-            if sumlev != block_sumlev:
+            if parts[2].strip() != block_sumlev:
                 continue
 
-            raw_geoid = line[25:85].strip()
-            # Full block GEOID has prefix like "7500000US484530001001000"
-            # Strip the prefix to get the bare 15-digit block FIPS code
-            bare_geoid = re.sub(r"^\d{3}0+US", "", raw_geoid)
+            logrecno = parts[7].strip().zfill(7)
+            raw_geoid = parts[8].strip()
 
-            state  = line[27:29].strip()
-            county = line[29:32].strip()
-            tract  = line[54:60].strip()
-            tract_geoid = state + county + tract   # 11-digit tract GEOID
+            # Strip prefix like "7500000US" to get bare 15-digit block FIPS
+            bare_geoid = re.sub(r"^\d+US", "", raw_geoid)
+
+            if len(bare_geoid) < 11:
+                continue  # malformed row, skip
+
+            tract_geoid = bare_geoid[:11]  # state(2) + county(3) + tract(6)
 
             records.append({
-                "LOGRECNO": line[18:25].strip().zfill(7),
-                "GEOID20":    bare_geoid,
+                "LOGRECNO":    logrecno,
+                "GEOID20":     bare_geoid,
                 "tract_geoid": tract_geoid,
             })
 
