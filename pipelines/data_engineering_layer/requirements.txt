@@ -1,0 +1,8 @@
+# TX Redistricting Data Engineering Pipeline
+# Python 3.10+
+
+geopandas>=0.14.0
+pandas>=2.0.0
+numpy>=1.24.0
+shapely>=2.0.0      # make_valid support
+pyogrio>=0.7.0      # fast GeoDataFrame I/O (replaces fiona for .gpkg writes)
