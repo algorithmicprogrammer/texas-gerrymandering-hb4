@@ -345,9 +345,13 @@ def apply_cvap_discounting(
     # Because ACS Tract.csv doesn't have BVAP_acs, we use the CVAP_acs total
     # as a normalizer and scale against the Decennial VAP totals at tract level.
 
+    # Compute White+Other combined VAP before tract aggregation so it can be
+    # included in the tract-level denominator used by _discount()
+    df["_WOVAP"] = df["WVAP"] + df["OVAP"]
+
     # Aggregate Decennial VAP to tract for normalization denominator
     tract_pl_vap = (
-        df.groupby("tract_geoid")[["VAP", "BVAP", "HVAP", "AVAP", "AMINVAP", "WVAP", "OVAP"]]
+        df.groupby("tract_geoid")[["VAP", "BVAP", "HVAP", "AVAP", "AMINVAP", "WVAP", "OVAP", "_WOVAP"]]
         .sum()
         .add_suffix("_pl_tract")
         .reset_index()
@@ -381,13 +385,12 @@ def apply_cvap_discounting(
         (blocks_vap["WVAP"] + blocks_vap["OVAP"]).sum(), 1
     )
 
-    df["BCVAP"]    = _discount(df, "BVAP",             "BCVAP_acs",    "BCVAP",    state_b)
-    df["HCVAP"]    = _discount(df, "HVAP",             "HCVAP_acs",    "HCVAP",    state_h)
-    df["ACVAP"]    = _discount(df, "AVAP",             "ACVAP_acs",    "ACVAP",    state_a)
-    df["AMINCVAP"] = _discount(df, "AMINVAP",          "AMINCVAP_acs", "AMINCVAP", state_amin)
+    df["BCVAP"]    = _discount(df, "BVAP",    "BCVAP_acs",    "BCVAP",    state_b)
+    df["HCVAP"]    = _discount(df, "HVAP",    "HCVAP_acs",    "HCVAP",    state_h)
+    df["ACVAP"]    = _discount(df, "AVAP",    "ACVAP_acs",    "ACVAP",    state_a)
+    df["AMINCVAP"] = _discount(df, "AMINVAP", "AMINCVAP_acs", "AMINCVAP", state_amin)
     # White+Other share a single ACS rate (MGGG "folded Other" convention)
-    df["_WOVAP"]   = df["WVAP"] + df["OVAP"]
-    df["WCVAP"]    = _discount(df, "_WOVAP",           "WCVAP_acs",    "WCVAP",    state_w)
+    df["WCVAP"]    = _discount(df, "_WOVAP",  "WCVAP_acs",    "WCVAP",    state_w)
 
     # Total CVAP = sum of the five mutually disjoint groups
     df["CVAP"] = df[["BCVAP", "HCVAP", "ACVAP", "AMINCVAP", "WCVAP"]].sum(axis=1)

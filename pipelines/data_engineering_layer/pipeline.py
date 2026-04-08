@@ -33,6 +33,7 @@ from elections import load_election_data
 from join import assemble_final_dataset
 from validate import run_all_validations
 from schema import enforce_schema, compute_derived_columns
+from loguru import logger as log
 
 # ---------------------------------------------------------------------------
 # Path configuration – edit these to match your directory layout
