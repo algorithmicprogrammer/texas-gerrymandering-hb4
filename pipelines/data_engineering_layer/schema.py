@@ -38,6 +38,7 @@ SCHEMA = [
     # --- VAP ---
     ("BVAP",                "float64", 0.0),
     ("HVAP",                "float64", 0.0),
+    ("WVAP",                "float64", 0.0),
     ("AVAP",                "float64", 0.0),
     ("AMINVAP",             "float64", 0.0),
     ("OVAP",                "float64", 0.0),

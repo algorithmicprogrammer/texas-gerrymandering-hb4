@@ -33,6 +33,7 @@ TX_CRS = "EPSG:3083"
 
 # Demographic columns to aggregate by area weight
 DEMO_COLS = [
+    "POP20",
     "VAP", "BVAP", "HVAP", "AVAP", "AMINVAP", "OVAP", "WVAP",
     "CVAP", "BCVAP", "HCVAP", "ACVAP", "AMINCVAP", "WCVAP",
 ]
@@ -150,6 +151,7 @@ def spatial_crosswalk_blocks_to_vtd(
     # Attach VTD geometry (dissolve in case of any duplicates)
     vtd_geom = vtd_geo[["CNTYVTD", "geometry"]].dissolve(by="CNTYVTD").reset_index()
     vtd_demo = vtd_geom.merge(vtd_demo, on="CNTYVTD", how="left")
+    vtd_demo = vtd_demo.rename(columns={"POP20": "TOTALPOP"})
 
     log.info(
         f"  Crosswalk complete: {len(vtd_demo):,} VTDs  "

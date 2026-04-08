@@ -99,6 +99,7 @@ def run_pipeline():
     # ------------------------------------------------------------------
     log.info("Step 2 — Constructing block-level VAP variables (MGGG convention)")
     blocks_vap = build_block_vap(sources["pl_blocks"])
+    log.info(f"  VAP sum check: {blocks_vap['VAP'].sum():,.0f}")
 
     # ------------------------------------------------------------------
     # 3. CVAP via discounting (MGGG method)
