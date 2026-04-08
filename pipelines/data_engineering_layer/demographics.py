@@ -24,11 +24,9 @@ Donnay, Duchin & Rock (n.d.). Conventions for Constructing Demographic
   Categories. Data and Democracy Lab. https://mggg.org/vap-cvap
 """
 
-import logging
 import numpy as np
 import pandas as pd
-
-log = logging.getLogger(__name__)
+from loguru import logger as log
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +392,24 @@ def apply_cvap_discounting(
 
     # Total CVAP = sum of the five mutually disjoint groups
     df["CVAP"] = df[["BCVAP", "HCVAP", "ACVAP", "AMINCVAP", "WCVAP"]].sum(axis=1)
+
+    # Cap each group CVAP at its corresponding VAP to prevent ACS rounding
+    # from producing CVAP > VAP. MGGG does not apply this cap but it is
+    # methodologically defensible and eliminates the validation warning.
+    # _WOVAP is the correct denominator for WCVAP (White + Other folded).
+    for vap_col, cvap_col in [
+        ("BVAP",   "BCVAP"),
+        ("HVAP",   "HCVAP"),
+        ("AVAP",   "ACVAP"),
+        ("AMINVAP","AMINCVAP"),
+        ("_WOVAP", "WCVAP"),
+    ]:
+        df[cvap_col] = np.minimum(df[cvap_col], df[vap_col])
+    # Recompute total CVAP after capping and cap against total VAP
+    df["CVAP"] = np.minimum(
+        df[["BCVAP", "HCVAP", "ACVAP", "AMINCVAP", "WCVAP"]].sum(axis=1),
+        df["VAP"],
+    )
 
     n_fallback = df[f"BVAP_pl_tract"].lt(threshold).sum()
     log.info(

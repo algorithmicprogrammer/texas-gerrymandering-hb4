@@ -93,6 +93,10 @@ def run_pipeline():
     # ------------------------------------------------------------------
     log.info("Step 1 — Ingesting raw data sources")
     sources = load_all_sources(PATHS, block_sumlev=BLOCK_SUMLEV)
+    log.info(f"  pl_blocks rows: {len(sources['pl_blocks'])}")
+    log.info(f"  pl_blocks cols: {list(sources['pl_blocks'].columns[:8])}")
+    log.info(
+        f"  P0030001 sample: {sources['pl_blocks']['P0030001'].head(3).tolist() if 'P0030001' in sources['pl_blocks'].columns else 'MISSING'}")
 
     # ------------------------------------------------------------------
     # 2. Build block-level VAP demographic variables
