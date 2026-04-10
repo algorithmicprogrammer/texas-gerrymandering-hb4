@@ -90,9 +90,6 @@ SCHEMA = [
     ("ReyesR_24P",          "int64",   0),
     ("BurchD_24P",          "int64",   0),
     ("CulbertD_24P",        "int64",   0),
-    ("JonesD_24P",          "int64",   0),
-    ("SarosdyD_24P",        "int64",   0),
-    ("GoldsteinD_24P",      "int64",   0),
     # --- Total vote columns ---
     ("TOTVOTE_PRES_24G",    "int64",   0),
     ("TOTVOTE_SEN_24G",     "int64",   0),

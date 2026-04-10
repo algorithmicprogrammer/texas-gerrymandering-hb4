@@ -69,9 +69,6 @@ DEM_PRIMARY_MAP = [
     # Railroad Commissioner
     ("RR Comm 1", r"Burch",      "D", "BurchD_24P"),
     ("RR Comm 1", r"Culbert",    "D", "CulbertD_24P"),
-    ("RR Comm 1", r"Jones",      "D", "JonesD_24P"),
-    ("RR Comm 1", r"Sarosdy",    "D", "SarosdyD_24P"),
-    ("RR Comm 1", r"Goldstein",  "D", "GoldsteinD_24P"),
 ]
 
 REP_PRIMARY_MAP = [
@@ -117,8 +114,7 @@ TOTALS_SPEC = {
                           "PrillimanD_24P", "ShermanD_24P", "TchenkoD_24P"],
     "TOTVOTE_RRCR_24P":  ["ClarkR_24P", "CraddickR_24P", "HowellR_24P",
                           "MatlockR_24P", "ReyesR_24P"],
-    "TOTVOTE_RRCD_24P":  ["BurchD_24P", "CulbertD_24P", "JonesD_24P",
-                          "SarosdyD_24P", "GoldsteinD_24P"],
+    "TOTVOTE_RRCD_24P":  ["BurchD_24P", "CulbertD_24P"],
 }
 
 
