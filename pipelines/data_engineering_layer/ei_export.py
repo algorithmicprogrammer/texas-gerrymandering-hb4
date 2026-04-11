@@ -97,12 +97,10 @@ def export_for_ei(
     # other_prop = 1 - hisp - black - white - asian - amin, clipped to [0,1]
     # This ensures the four group fractions passed to eiPack sum to 1.
     df["other_prop"] = (
-        1.0
-        - df["hisp_prop"].fillna(0)
-        - df["black_prop"].fillna(0)
-        - df["white_prop"].fillna(0)
-        - df["asian_prop"].fillna(0)
-        - df["amin_prop"].fillna(0)
+            1.0
+            - df["hisp_prop"].fillna(0)
+            - df["black_prop"].fillna(0)
+            - df["white_prop"].fillna(0)
     ).clip(lower=0.0, upper=1.0)
 
     # ── Recompute TOTVOTE_PRESR_24P without UncommittedR ────────────────────
