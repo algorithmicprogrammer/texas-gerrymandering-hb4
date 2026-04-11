@@ -43,6 +43,11 @@ VTDS_SHP_FILE= VTDS_GEO_DIR / "VTDs_24PG.shp"
 ACS_CSV_DIR = RAW_DATA_DIR / "CVAP_2020-2024_ACS_csv_files"
 ACS_CSV_FILE = ACS_CSV_DIR / "Tract.csv"
 
+CANDIDATE_RACE_PARTY = RAW_DATA_DIR / "Candidate_Race_Party.csv"
+DROPPED_ELECS = RAW_DATA_DIR / "dropped_elecs.csv"
+RECENCY_WEIGHTS = RAW_DATA_DIR / "recency_weights.csv"
+TX_ELECTIONS = RAW_DATA_DIR / "TX_elections.csv"
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
