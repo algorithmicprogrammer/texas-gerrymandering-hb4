@@ -1,7 +1,0 @@
-{
-  "variant": "lasso",
-  "threshold": 0.33,
-  "balanced_accuracy_on_train": 0.9166666666666667,
-  "use_polynomial_features": false,
-  "polynomial_degree": 1
-}
