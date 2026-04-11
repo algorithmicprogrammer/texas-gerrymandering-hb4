@@ -174,72 +174,20 @@ venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
-6. Run data pipeline.
+6. Run data engineering layer.
+
+
+7. Run ecological inference layer.
 
 * Command for Linux/MacOS:
 ```commandline
-python -m pipelines.data.cli \
-  --districts data/raw/PLANC2333/PLANC2333.shp \
-  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp \
-  --vtds data/raw/vtds_24pg/VTDs_24PG.shp \
-  --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt \
-  --cvap-blockgr data/raw/CVAP_2020-2024_ACS_csv_files/BlockGr.csv \
-  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv \
-  --out data/processed \
-  --plan-id ENACTED_PLANC2333 \
-  --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --cycle 2025 \
-  --chamber USCD \
-  --election-id TX_SEN_2024_GEN \
-  --election-year 2024 \
-  --election-office "U.S. Sen" \
-  --election-stage GENERAL \
-  --elections-office-filter "U.S. Sen"
+cd pipelines/ecological_inference_layer
+python run_ei.py
 ```
 
 * Command for Windows 11 Command Prompt:
 ```commandline
-python -m pipelines.data.cli ^
-  --districts data/raw/PLANC2333/PLANC2333.shp ^
-  --census data/raw/tl_2020_48_tabblock20/tl_2020_48_tabblock20.shp ^
-  --vtds data/raw/vtds_24pg/VTDs_24PG.shp ^
-  --pl94 data/raw/tx_pl2020_official/Blocks_Pop.txt ^
-  --cvap-blockgr data/raw/CVAP_2020-2024_ACS_csv_files/BlockGr.csv ^
-  --elections data/raw/2024-general-vtds-election-data/2024_General_Election_Returns.csv ^
-  --out data/processed ^
-  --plan-id ENACTED_PLANC2333 ^
-  --ensemble-id ENS_TXCD_2024_recom_v1 ^
-  --cycle 2025 ^
-  --chamber USCD ^
-  --election-id TX_SEN_2024_GEN ^
-  --election-year 2024 ^
-  --election-office "U.S. Sen" ^
-  --election-stage GENERAL ^
-  --elections-office-filter "U.S. Sen"
-```
 
-7. Run ensemble-generating pipeline.
-
-* Command for Linux/MacOS:
-```commandline
-chmod +x scripts/run_txcd_recom_4chains.sh
-./scripts/run_txcd_recom_4chains.sh
-```
-
-* Command for Windows 11 Command Prompt:
-```commandline
-python -m pipelines.ensembles.generate_recom_ensemble ^
-  --vtds-geo data\processed\geospatial\vtds.parquet ^
-  --enacted-plan-map data\processed\plan_district_vtd.parquet ^
-  --ensemble-id ENS_TXCD_2024_recom_v1 ^
-  --out-plan-map data\processed\ensemble_plan_district_vtd.parquet ^
-  --out-plans data\processed\ensemble_plans.parquet ^
-  --pop-col total_pop ^
-  --epsilon 0.01 ^
-  --n-steps 5000 ^
-  --burnin 500 ^
-  --thin 10 ^
-  --seed 20240101
 ```
 
 8. Run redistricting pipeline against ensemble.
