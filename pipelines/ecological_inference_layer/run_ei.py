@@ -11,9 +11,8 @@ Both implement the same hierarchical Multinomial-Dirichlet Bayesian model
 
 Inputs (all in same directory as this script):
   tx_precincts_for_ei.csv      — precinct data from data engineering pipeline
-  Candidate_Race_Party.csv     — candidate race/party lookup
   TX_elections.csv             — election set definitions
-  recency_weights.csv          — year → weight mapping
+  recency_weights.csv          — year -> weight mapping
   dropped_elecs.csv            — election sets to exclude (may be empty)
 
 Outputs written to ei_outputs/:
@@ -25,6 +24,7 @@ Run:
   pip install pyei
   python run_ei.py
 """
+from texas_gerrymandering_hb4.config import DROPPED_ELECS, RECENCY_WEIGHTS, TX_ELECTIONS, PRECINCT_DATASET_CSV
 
 import os
 import gc
@@ -32,18 +32,18 @@ import numpy as np
 import pandas as pd
 from pyei.r_by_c import RowByColumnEI
 
-# ── MCMC settings (match paper: ~1000 effective draws) ────────────────────────
+# -- MCMC settings (match paper: ~1000 effective draws) -----------------------
 DRAWS       = 1000    # posterior draws to keep per chain
 TUNE        = 1000    # tuning/burn-in steps
 CHAINS      = 2       # number of chains
 RANDOM_SEED = 42
 
-# ── Demographic group columns (R=4, must sum to 1 per precinct) ───────────────
+# -- Demographic group columns (R=4, must sum to 1 per precinct) --------------
 GROUP_COLS   = ["hisp_prop", "black_prop", "white_prop", "other_prop"]
 GROUP_LABELS = ["Hispanic", "Black", "White", "Other"]
 
-# ── Election definitions: election key → (candidate vote cols, total col) ─────
-# UncommittedR_24P excluded — no racial identity.
+# -- Election definitions: election key -> (candidate vote cols, total col) ---
+# UncommittedR_24P excluded -- no racial identity.
 ELECTIONS = {
 
     "24G_President": {
@@ -58,7 +58,7 @@ ELECTIONS = {
             "BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
             "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P", "DeSantisR_24P",
         ],
-        "total": None,  # computed as row sum of candidate cols
+        "total": None,
     },
 
     "24G_US_Sen": {
@@ -91,13 +91,13 @@ ELECTIONS = {
     },
 }
 
-# ── Load supporting files ──────────────────────────────────────────────────────
+# -- Load supporting files -----------------------------------------------------
 print("Loading input files...")
 
-vtd     = pd.read_csv("tx_precincts_for_ei.csv")
-elec_df = pd.read_csv("TX_elections.csv")
-recency = pd.read_csv("recency_weights.csv")
-dropped = pd.read_csv("dropped_elecs.csv")
+vtd     = pd.read_csv(PRECINCT_DATASET_CSV)
+elec_df = pd.read_csv(TX_ELECTIONS)
+recency = pd.read_csv(RECENCY_WEIGHTS)
+dropped = pd.read_csv(DROPPED_ELECS)
 
 # Parse recency weight
 recency_year   = int(recency.columns[0])
@@ -121,15 +121,15 @@ print(f"  Active elections: {', '.join(active_elections)}")
 vtd = vtd[vtd["CVAP"].notna() & (vtd["CVAP"] > 0)].copy()
 print(f"  Precincts after CVAP>0 filter: {len(vtd)}")
 
-# ── Output directory ───────────────────────────────────────────────────────────
+# -- Output directory ----------------------------------------------------------
 os.makedirs("ei_outputs", exist_ok=True)
 
-# ── Output accumulators ────────────────────────────────────────────────────────
+# -- Output accumulators -------------------------------------------------------
 statewide_rows    = []
 mean_counts_list  = []
 quant_counts_list = []
 
-# ── Main EI loop ───────────────────────────────────────────────────────────────
+# -- Main EI loop --------------------------------------------------------------
 for elec_key in active_elections:
 
     spec      = ELECTIONS[elec_key]
@@ -143,7 +143,7 @@ for elec_key in active_elections:
     # Verify all candidate columns exist
     missing = [c for c in cand_cols if c not in vtd.columns]
     if missing:
-        print(f"  WARNING: Skipping {elec_key} — missing columns: {missing}")
+        print(f"  WARNING: Skipping {elec_key} -- missing columns: {missing}")
         continue
 
     # Build total column if not pre-computed
@@ -157,28 +157,51 @@ for elec_key in active_elections:
     print(f"  Precincts with votes: {n}")
 
     if n < 50:
-        print(f"  WARNING: Skipping {elec_key} — too few precincts ({n})")
+        print(f"  WARNING: Skipping {elec_key} -- too few precincts ({n})")
         continue
 
+    # Round CVAP to integers (pyei requirement) and drop any that round to 0
     cvap = np.round(sub["CVAP"].values).astype(int)
-
-    # Drop any precincts where rounded CVAP == 0 to avoid divide-by-zero
     mask = cvap > 0
     sub  = sub[mask].reset_index(drop=True)
     cvap = cvap[mask]
 
-    # ── Build pyei inputs ──────────────────────────────────────────────────────
-    # group_fractions: normalize each row to sum exactly to 1 (pyei requirement)
-    group_fractions = sub[GROUP_COLS].fillna(0).values.astype(float)
-    row_sums = group_fractions.sum(axis=1, keepdims=True)
-    row_sums = np.where(row_sums == 0, 1, row_sums)   # avoid div/0 on empty rows
-    group_fractions = group_fractions / row_sums
+    # -- Build pyei inputs -----------------------------------------------------
+    # pyei expects shape (n_groups, n_precincts) — i.e. transposed relative to
+    # the natural (n_precincts, n_groups) orientation. It validates by checking
+    # group_fractions.sum(axis=0) == 1, which sums down columns (across groups
+    # within each precinct). So each COLUMN must sum to 1.
 
-    # votes_fractions: candidate votes as fraction of CVAP, clipped to [0,1]
-    # pyei requires fractions of the *population* (CVAP), not of votes cast,
-    # so each row sums to <= 1 (remainder = abstain/non-voter)
-    vote_counts = sub[cand_cols].values.astype(float)
-    votes_fracs = np.clip(vote_counts / cvap[:, None], 0, 1)
+    # Step 1: build row-normalised (n_precincts, n_groups), then transpose
+    gf_rows = sub[GROUP_COLS].fillna(0).values.astype(float)
+    row_sums = gf_rows.sum(axis=1, keepdims=True)
+    row_sums = np.where(row_sums == 0, 1, row_sums)
+    gf_rows  = gf_rows / row_sums
+    # Force exact row sums to 1 via last-column adjustment
+    gf_rows[:, -1] = 1.0 - gf_rows[:, :-1].sum(axis=1)
+    gf_rows  = np.clip(gf_rows, 0, 1)
+    # Transpose to (n_groups, n_precincts) as pyei expects
+    group_fractions = gf_rows.T
+
+    # Step 2: votes_fractions — same transposition logic
+    # Use max(CVAP, total_votes) as denominator so fracs never exceed 1.
+    # When turnout exceeds CVAP (ACS estimate), total_votes is used instead,
+    # preserving the Abstain column for precincts where turnout < CVAP.
+    vote_counts      = sub[cand_cols].values.astype(float)
+    total_votes      = vote_counts.sum(axis=1)
+    denom            = np.maximum(cvap.astype(float), total_votes)
+    denom            = np.where(denom == 0, 1, denom)
+    # precinct_pops for pyei must match the denominator used for votes_fracs
+    precinct_pops_ei = np.round(denom).astype(int)
+    vf_rows      = vote_counts / denom[:, None]
+    # Add Abstain = remainder of CVAP not voting for any candidate
+    vf_rows      = np.hstack([vf_rows, np.zeros((len(vf_rows), 1))])
+    vf_rows[:, -1] = 1.0 - vf_rows[:, :-1].sum(axis=1)
+    vf_rows      = np.clip(vf_rows, 0, 1)
+    # Transpose to (n_cands+1, n_precincts) as pyei expects
+    votes_fracs  = vf_rows.T
+
+    all_labels = cand_cols + ["Abstain"]
 
     print(f"  Fitting RxC EI (draws={DRAWS}, tune={TUNE}, chains={CHAINS})...")
 
@@ -186,44 +209,46 @@ for elec_key in active_elections:
     ei.fit(
         group_fractions          = group_fractions,
         votes_fractions          = votes_fracs,
-        precinct_pops            = cvap,
+        precinct_pops            = precinct_pops_ei,
         demographic_group_labels = GROUP_LABELS,
-        candidate_labels         = cand_cols,
+        candidate_labels         = all_labels,
         draws                    = DRAWS,
         tune                     = TUNE,
         chains                   = CHAINS,
         random_seed              = RANDOM_SEED,
     )
 
-    # ── Extract posterior samples ──────────────────────────────────────────────
-    # sim_cols_vector shape: (n_draws * n_chains, n_precincts, n_groups, n_cands)
-    # Note: pyei axis order is [draws, precincts, groups, candidates]
-    samples  = ei.sim_cols_vector   # (total_draws, n_precincts, n_groups, n_cands)
-    n_draws  = samples.shape[0]
-    print(f"  Posterior samples shape: {samples.shape}  "
+    # -- Extract posterior samples ---------------------------------------------
+    # Raw samples from sim_trace, transposed to (n_draws, n_precincts, n_groups, n_cands+1)
+    samples_all = np.transpose(
+        ei.sim_trace["posterior"]["b"].stack(all_draws=["chain", "draw"]).values,
+        axes=(3, 0, 1, 2),
+    )
+    samples     = samples_all[:, :, :, :n_cands]  # real candidates only
+    n_draws     = samples.shape[0]
+    print(f"  Posterior samples shape (excl. Abstain): {samples.shape}  "
           f"(draws x precincts x groups x candidates)")
 
-    # ── 1. statewide_rxc_EI_preferences ───────────────────────────────────────
+    # -- 1. statewide_rxc_EI_preferences --------------------------------------
     print("  Computing statewide preferences...")
 
     for g_idx, group in enumerate(GROUP_LABELS):
-        group_pop       = sub[GROUP_COLS[g_idx]].values * cvap
+        group_pop       = sub[GROUP_COLS[g_idx]].values * precinct_pops_ei
         total_group_pop = group_pop.sum()
 
         if total_group_pop == 0:
             continue
 
         # draw_support[s, c] = state-level support for candidate c at draw s
-        # samples[:, :, g_idx, c_idx] → (n_draws, n_precincts)
-        # weighted mean over precincts: dot(beta_s_c, group_pop) / total_group_pop
+        # weighted mean over precincts
         draw_support = np.einsum(
             "spc,p->sc",
             samples[:, :, g_idx, :],   # (n_draws, n_precincts, n_cands)
             group_pop
-        ) / total_group_pop            # → (n_draws, n_cands)
+        ) / total_group_pop            # -> (n_draws, n_cands)
 
-        mean_support   = draw_support.mean(axis=0)          # (n_cands,)
-        draw_coc       = draw_support.argmax(axis=1)        # (n_draws,) — index of preferred cand
+        mean_support   = draw_support.mean(axis=0)
+        draw_coc       = draw_support.argmax(axis=1)
         frac_preferred = np.bincount(draw_coc, minlength=n_cands) / n_draws
 
         coc_idx  = int(mean_support.argmax())
@@ -237,17 +262,15 @@ for elec_key in active_elections:
             "frac_draws_preferred": round(float(frac_preferred[coc_idx]), 6),
         })
 
-    # ── 2. mean_prec_vote_counts ───────────────────────────────────────────────
+    # -- 2. mean_prec_vote_counts ----------------------------------------------
     print("  Computing mean precinct vote counts...")
 
     for g_idx, group in enumerate(GROUP_LABELS):
-        group_pop = sub[GROUP_COLS[g_idx]].values * cvap  # (n_precincts,)
+        group_pop = sub[GROUP_COLS[g_idx]].values * precinct_pops_ei
 
         for c_idx, cand in enumerate(cand_cols):
-            # samples[:, :, g_idx, c_idx] → (n_draws, n_precincts)
-            # count estimate per draw per precinct = beta * group_pop
-            count_draws  = samples[:, :, g_idx, c_idx] * group_pop[None, :]
-            mean_counts  = count_draws.mean(axis=0)     # (n_precincts,)
+            count_draws = samples[:, :, g_idx, c_idx] * group_pop[None, :]
+            mean_counts = count_draws.mean(axis=0)
 
             chunk = pd.DataFrame({
                 "CNTYVTD":    sub["CNTYVTD"].values,
@@ -258,18 +281,16 @@ for elec_key in active_elections:
             })
             mean_counts_list.append(chunk)
 
-    # ── 3. prec_count_quants ───────────────────────────────────────────────────
+    # -- 3. prec_count_quants -------------------------------------------------
     print("  Computing precinct count quantiles...")
     octile_probs = np.arange(1, 9) / 8   # 0.125, 0.25, ..., 1.0
 
     for g_idx, group in enumerate(GROUP_LABELS):
-        group_pop = sub[GROUP_COLS[g_idx]].values * cvap
+        group_pop = sub[GROUP_COLS[g_idx]].values * precinct_pops_ei
 
         for c_idx, cand in enumerate(cand_cols):
-            count_draws = samples[:, :, g_idx, c_idx] * group_pop[None, :]
-            # count_draws: (n_draws, n_precincts) → quantiles over draws axis
+            count_draws  = samples[:, :, g_idx, c_idx] * group_pop[None, :]
             quant_matrix = np.quantile(count_draws, octile_probs, axis=0)
-            # quant_matrix: (8, n_precincts)
 
             for q_idx, (prob, qvals) in enumerate(
                     zip(octile_probs, quant_matrix), start=1):
@@ -287,10 +308,10 @@ for elec_key in active_elections:
     print(f"  Done: {elec_key}")
 
     # Free memory before next election
-    del ei, samples, vote_counts, votes_fracs, group_fractions
+    del ei, samples_all, samples, vote_counts, votes_fracs, group_fractions
     gc.collect()
 
-# ── Write outputs ──────────────────────────────────────────────────────────────
+# -- Write outputs -------------------------------------------------------------
 print("\nWriting outputs to ei_outputs/...")
 
 statewide_df = pd.DataFrame(statewide_rows)
