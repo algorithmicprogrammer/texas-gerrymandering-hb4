@@ -31,6 +31,9 @@ import gc
 import numpy as np
 import pandas as pd
 from pyei.r_by_c import RowByColumnEI
+import pytensor
+
+pytensor.config.mode = "NUMBA"
 
 # -- MCMC settings (match paper: ~1000 effective draws) -----------------------
 DRAWS       = 1000    # posterior draws to keep per chain
