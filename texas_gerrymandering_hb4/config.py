@@ -48,7 +48,7 @@ DROPPED_ELECS = RAW_DATA_DIR / "dropped_elecs.csv"
 RECENCY_WEIGHTS = RAW_DATA_DIR / "recency_weights.csv"
 TX_ELECTIONS = RAW_DATA_DIR / "TX_elections.csv"
 
-PRECINCT_DATASET_CSV = PROCESSED_DATA_DIR/"tx_precincts_for_ei.csv"
+PRECINCT_DATASET_CSV = PROCESSED_DATA_DIR/"tx_cvap_for_ei.csv"
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
