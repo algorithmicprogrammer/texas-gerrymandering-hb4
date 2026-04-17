@@ -122,14 +122,15 @@ def export_for_ei(
     n_rows       = len(ei_df)
     n_zero_cvap  = (ei_df["CVAP"] == 0).sum()
     prop_cols    = ["hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
-    prop_sum     = ei_df[prop_cols].sum(axis=1)
+    nonzero_cvap = ei_df["CVAP"] > 0
+    prop_sum     = ei_df.loc[nonzero_cvap, prop_cols].sum(axis=1)
     n_bad_sum    = ((prop_sum - 1.0).abs() > 0.01).sum()
 
     log.info(f"  EI CSV: {n_rows:,} precincts")
     log.info(f"  EI CSV: {n_zero_cvap:,} precincts with CVAP=0 (kept; R filters them)")
     if n_bad_sum > 0:
         log.warning(
-            f"  EI CSV: {n_bad_sum} precincts where group proportions "
+            f"  EI CSV: {n_bad_sum} non-zero-CVAP precincts where group proportions "
             f"don't sum to 1 ± 0.01 — check CVAP discounting"
         )
     else:
