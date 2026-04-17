@@ -34,8 +34,8 @@ from pyei.r_by_c import RowByColumnEI
 
 # -- MCMC settings (match paper: ~1000 effective draws) -----------------------
 DRAWS       = 1000    # posterior draws to keep per chain
-TUNE        = 1000    # tuning/burn-in steps
-CHAINS      = 2       # number of chains
+TUNE        = 100000    # tuning/burn-in steps
+CHAINS      = 1       # number of chains
 RANDOM_SEED = 42
 
 # -- Demographic group columns (R=4, must sum to 1 per precinct) --------------
