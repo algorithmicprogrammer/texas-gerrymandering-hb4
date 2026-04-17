@@ -169,10 +169,10 @@ def run_pipeline():
     final.to_parquet(out_path, index=False)
 
     # ------------------------------------------------------------------
-    # 11. Export EI CSV
+    # 11. Export EI CSV (and write abstain columns back to parquet)
     # ------------------------------------------------------------------
-    log.info("Step 11 — Exporting EI-ready CSV for run_ei.R")
-    export_for_ei(final, OUT)
+    log.info("Step 11 — Exporting EI-ready CSV and precomputing abstain columns")
+    export_for_ei(final, OUT, parquet_path=out_path)
 
     log.info("=== Pipeline complete ===")
     return final

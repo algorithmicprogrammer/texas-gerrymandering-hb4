@@ -41,8 +41,8 @@ CHAINS      = 1       # number of chains
 RANDOM_SEED = 42
 
 # -- Demographic group columns (R=4, must sum to 1 per precinct) --------------
-GROUP_COLS   = ["hisp_prop", "black_prop", "white_prop", "other_prop"]
-GROUP_LABELS = ["Hispanic", "Black", "White", "Other"]
+GROUP_COLS   = ["hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
+GROUP_LABELS = ["Hispanic", "Black", "White", "Asian", "AMIN"]
 
 # -- Election definitions: election key -> (candidate vote cols, total col) ---
 # UncommittedR_24P excluded -- no racial identity.
