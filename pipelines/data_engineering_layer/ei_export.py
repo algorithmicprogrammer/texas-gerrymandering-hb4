@@ -6,10 +6,10 @@ Export the EI-ready CSV from the final dataset.
 The CSV is a flat, geometry-free version of tx_precincts_final.parquet
 containing only the columns that run_ei.R needs:
 
-  - CNTYVTD                       (join key)
-  - CVAP                          (total eligible voters, used to weight EI)
-  - hisp_prop, black_prop,        (group fractions — must sum to ~1 per row)
-    white_prop, other_prop
+  - CNTYVTD                                      (join key)
+  - CVAP                                         (total eligible voters, used to weight EI)
+  - hisp_prop, black_prop, white_prop,           (group fractions, passed through as-is
+    asian_prop, amin_prop                         from the parquet schema)
   - All candidate vote count cols (int)
   - All TOTVOTE_* cols            (int)
 
@@ -17,9 +17,9 @@ Notes
 -----
 - Rows where CVAP == 0 are kept; run_ei.R filters them out itself so that
   the CNTYVTD index stays consistent with the full precinct file.
-- other_prop is derived here as 1 - (hisp + black + white + asian + amin)
-  clipped to [0, 1].  This matches the eiPack convention that group
-  fractions must sum to 1 within each precinct.
+- Proportion columns (hisp_prop, black_prop, white_prop, asian_prop, amin_prop)
+  are passed through directly from the parquet schema without collapsing or
+  deriving other_prop.
 - UncommittedR_24P is excluded from the CSV.  It has no racial identity
   and is omitted from run_ei.R's PRESR_24P election definition.
 """
@@ -89,19 +89,9 @@ def export_for_ei(
     Path to the written CSV.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "tx_precincts_for_ei.csv"
+    out_path = out_dir / "tx_cvap_for_ei.csv"
 
     df = pd.DataFrame(final)   # drop geometry
-
-    # ── Build other_prop ────────────────────────────────────────────────────
-    # other_prop = 1 - hisp - black - white - asian - amin, clipped to [0,1]
-    # This ensures the four group fractions passed to eiPack sum to 1.
-    df["other_prop"] = (
-            1.0
-            - df["hisp_prop"].fillna(0)
-            - df["black_prop"].fillna(0)
-            - df["white_prop"].fillna(0)
-    ).clip(lower=0.0, upper=1.0)
 
     # ── Recompute TOTVOTE_PRESR_24P without UncommittedR ────────────────────
     # The schema's TOTVOTE_PRESR_24P includes UncommittedR_24P.  For EI we
@@ -114,7 +104,7 @@ def export_for_ei(
     # ── Select and order columns ─────────────────────────────────────────────
     ei_cols = (
         ["CNTYVTD", "CVAP",
-         "hisp_prop", "black_prop", "white_prop", "other_prop"]
+         "hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
         + ALL_VOTE_COLS
         + TOTVOTE_COLS
     )
@@ -131,7 +121,7 @@ def export_for_ei(
     # ── Validation ───────────────────────────────────────────────────────────
     n_rows       = len(ei_df)
     n_zero_cvap  = (ei_df["CVAP"] == 0).sum()
-    prop_cols    = ["hisp_prop", "black_prop", "white_prop", "other_prop"]
+    prop_cols    = ["hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
     prop_sum     = ei_df[prop_cols].sum(axis=1)
     n_bad_sum    = ((prop_sum - 1.0).abs() > 0.01).sum()
 
