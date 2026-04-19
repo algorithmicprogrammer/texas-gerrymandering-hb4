@@ -24,6 +24,11 @@ Run:
   pip install pyei
   python run_ei.py
 """
+
+# -- Must be set before any JAX/PyMC imports ----------------------------------
+import jax
+jax.config.update("jax_enable_x64", False)
+
 from texas_gerrymandering_hb4.config import DROPPED_ELECS, RECENCY_WEIGHTS, TX_ELECTIONS, PRECINCT_DATASET_CSV
 
 import os
@@ -44,52 +49,75 @@ RANDOM_SEED = 42
 GROUP_COLS   = ["hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
 GROUP_LABELS = ["Hispanic", "Black", "White", "Asian", "AMIN"]
 
-# -- Election definitions: election key -> (candidate vote cols, total col) ---
+# -- Election definitions: election key -> (candidate vote cols, total col,
+#                                           abstain col precomputed in ei_export)
+# Mixed primaries are split by party so each election has exactly one
+# precomputed abstain column (abstain = CVAP - party-specific TOTVOTE).
 # UncommittedR_24P excluded -- no racial identity.
 ELECTIONS = {
 
     "24G_President": {
-        "cands": ["TrumpR_24G", "HarrisD_24G"],
-        "total": "TOTVOTE_PRES_24G",
+        "cands":   ["TrumpR_24G", "HarrisD_24G"],
+        "total":   "TOTVOTE_PRES_24G",
+        "abstain": "24G_President_abstain",
     },
 
-    "24P_President": {
+    "24P_PresD": {
         "cands": [
             "BidenD_24P", "CornejoD_24P", "LockeD_24P", "LozadaD_24P",
             "PerezD_24P", "PhillipsD_24P", "UygurD_24P", "WilliamsonD_24P",
+        ],
+        "total":   "TOTVOTE_PRESD_24P",
+        "abstain": "24P_PresD_abstain",
+    },
+
+    "24P_PresR": {
+        "cands": [
             "BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
             "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P", "DeSantisR_24P",
         ],
-        "total": None,
+        "total":   "TOTVOTE_PRESR_24P",
+        "abstain": "24P_PresR_abstain",
     },
 
     "24G_US_Sen": {
-        "cands": ["CruzR_24G", "AllredD_24G"],
-        "total": "TOTVOTE_SEN_24G",
+        "cands":   ["CruzR_24G", "AllredD_24G"],
+        "total":   "TOTVOTE_SEN_24G",
+        "abstain": "24G_US_Sen_abstain",
     },
 
-    "24P_US_Sen": {
+    "24P_SenD": {
         "cands": [
             "AllredD_24P", "GomezD_24P", "GonzalezD_24P", "GutierrezD_24P",
             "HassanD_24P", "KeoughD_24P", "PrillimanD_24P", "ShermanD_24P",
             "TchenkoD_24P",
-            "CruzR_24P", "GibsonR_24P", "LopezR_24P",
         ],
-        "total": None,
+        "total":   "TOTVOTE_SEND_24P",
+        "abstain": "24P_SenD_abstain",
+    },
+
+    "24P_SenR": {
+        "cands":   ["CruzR_24P", "GibsonR_24P", "LopezR_24P"],
+        "total":   "TOTVOTE_SENR_24P",
+        "abstain": "24P_SenR_abstain",
     },
 
     "24G_RR_Comm_1": {
-        "cands": ["CraddickR_24G", "CulbertD_24G"],
-        "total": "TOTVOTE_RRC_24G",
+        "cands":   ["CraddickR_24G", "CulbertD_24G"],
+        "total":   "TOTVOTE_RRC_24G",
+        "abstain": "24G_RR_Comm_1_abstain",
     },
 
-    "24P_RR_Comm_1": {
-        "cands": [
-            "BurchD_24P", "CulbertD_24P",
-            "ClarkR_24P", "CraddickR_24P", "HowellR_24P",
-            "MatlockR_24P", "ReyesR_24P",
-        ],
-        "total": None,
+    "24P_RRCD": {
+        "cands":   ["BurchD_24P", "CulbertD_24P"],
+        "total":   "TOTVOTE_RRCD_24P",
+        "abstain": "24P_RRCD_abstain",
+    },
+
+    "24P_RRCR": {
+        "cands":   ["ClarkR_24P", "CraddickR_24P", "HowellR_24P", "MatlockR_24P", "ReyesR_24P"],
+        "total":   "TOTVOTE_RRCR_24P",
+        "abstain": "24P_RRCR_abstain",
     },
 }
 
@@ -126,32 +154,55 @@ print(f"  Precincts after CVAP>0 filter: {len(vtd)}")
 # -- Output directory ----------------------------------------------------------
 os.makedirs("ei_outputs", exist_ok=True)
 
-# -- Output accumulators -------------------------------------------------------
-statewide_rows    = []
-mean_counts_list  = []
-quant_counts_list = []
+# -- Resume logic: load any previously saved outputs --------------------------
+STATEWIDE_CSV = "ei_outputs/statewide_rxc_EI_preferences.csv"
+MEAN_CSV      = "ei_outputs/mean_prec_vote_counts.csv"
+QUANT_CSV     = "ei_outputs/prec_count_quants.csv"
+
+if os.path.exists(STATEWIDE_CSV):
+    statewide_df_existing = pd.read_csv(STATEWIDE_CSV)
+    completed_elections   = set(statewide_df_existing["election"].unique())
+    statewide_rows        = statewide_df_existing.to_dict("records")
+    print(f"  Resuming — already completed: {completed_elections}")
+else:
+    completed_elections = set()
+    statewide_rows      = []
+
+if os.path.exists(MEAN_CSV):
+    mean_counts_list = [pd.read_csv(MEAN_CSV)]
+else:
+    mean_counts_list = []
+
+if os.path.exists(QUANT_CSV):
+    quant_counts_list = [pd.read_csv(QUANT_CSV)]
+else:
+    quant_counts_list = []
 
 # -- Main EI loop --------------------------------------------------------------
 for elec_key in active_elections:
 
-    spec      = ELECTIONS[elec_key]
-    cand_cols = spec["cands"]
-    total_col = spec["total"]
-    n_cands   = len(cand_cols)
+    # Skip already-completed elections
+    if elec_key in completed_elections:
+        print(f"\nSkipping {elec_key} (already completed)")
+        continue
+
+    spec        = ELECTIONS[elec_key]
+    cand_cols   = spec["cands"]
+    total_col   = spec["total"]
+    abstain_col = spec["abstain"]
+    n_cands     = len(cand_cols)
 
     print(f"\n{'='*60}")
     print(f"Election: {elec_key}  ({n_cands} candidates)")
 
-    # Verify all candidate columns exist
+    # Verify all candidate columns and the abstain column exist
     missing = [c for c in cand_cols if c not in vtd.columns]
     if missing:
         print(f"  WARNING: Skipping {elec_key} -- missing columns: {missing}")
         continue
-
-    # Build total column if not pre-computed
-    if total_col is None:
-        total_col = f"TOTAL_{elec_key}"
-        vtd[total_col] = vtd[cand_cols].sum(axis=1)
+    if abstain_col not in vtd.columns:
+        print(f"  WARNING: Skipping {elec_key} -- missing abstain column: {abstain_col}")
+        continue
 
     # Keep only precincts with votes in this election
     sub = vtd[vtd[total_col] > 0].copy().reset_index(drop=True)
@@ -185,23 +236,21 @@ for elec_key in active_elections:
     # Transpose to (n_groups, n_precincts) as pyei expects
     group_fractions = gf_rows.T
 
-    # Step 2: votes_fractions — same transposition logic
-    # Use max(CVAP, total_votes) as denominator so fracs never exceed 1.
-    # When turnout exceeds CVAP (ACS estimate), total_votes is used instead,
-    # preserving the Abstain column for precincts where turnout < CVAP.
-    vote_counts      = sub[cand_cols].values.astype(float)
-    total_votes      = vote_counts.sum(axis=1)
-    denom            = np.maximum(cvap.astype(float), total_votes)
-    denom            = np.where(denom == 0, 1, denom)
-    # precinct_pops for pyei must match the denominator used for votes_fracs
-    precinct_pops_ei = np.round(denom).astype(int)
-    vf_rows      = vote_counts / denom[:, None]
-    # Add Abstain = remainder of CVAP not voting for any candidate
-    vf_rows      = np.hstack([vf_rows, np.zeros((len(vf_rows), 1))])
-    vf_rows[:, -1] = 1.0 - vf_rows[:, :-1].sum(axis=1)
-    vf_rows      = np.clip(vf_rows, 0, 1)
-    # Transpose to (n_cands+1, n_precincts) as pyei expects
-    votes_fracs  = vf_rows.T
+    # Step 2: votes_fractions — use CVAP as the single denominator throughout.
+    vote_counts    = sub[cand_cols].values.astype(float)
+    abstain_counts = sub[abstain_col].values.astype(float)
+
+    n_obs            = vote_counts.sum(axis=1) + abstain_counts
+    precinct_pops_ei = np.round(n_obs).astype(int)
+    denom            = np.where(n_obs == 0, 1.0, n_obs)
+
+    vf_rows = np.hstack([
+        vote_counts / denom[:, None],
+        (abstain_counts / denom)[:, None],
+    ])
+    vf_rows = np.clip(vf_rows, 0, 1)
+    vf_rows = vf_rows / vf_rows.sum(axis=1, keepdims=True)
+    votes_fracs = vf_rows.T
 
     all_labels = cand_cols + ["Abstain"]
 
@@ -221,13 +270,12 @@ for elec_key in active_elections:
     )
 
     # -- Extract posterior samples ---------------------------------------------
-    # Raw samples from sim_trace, transposed to (n_draws, n_precincts, n_groups, n_cands+1)
     samples_all = np.transpose(
         ei.sim_trace["posterior"]["b"].stack(all_draws=["chain", "draw"]).values,
         axes=(3, 0, 1, 2),
     )
-    samples     = samples_all[:, :, :, :n_cands]  # real candidates only
-    n_draws     = samples.shape[0]
+    samples = samples_all[:, :, :, :n_cands]  # real candidates only
+    n_draws = samples.shape[0]
     print(f"  Posterior samples shape (excl. Abstain): {samples.shape}  "
           f"(draws x precincts x groups x candidates)")
 
@@ -241,13 +289,11 @@ for elec_key in active_elections:
         if total_group_pop == 0:
             continue
 
-        # draw_support[s, c] = state-level support for candidate c at draw s
-        # weighted mean over precincts
         draw_support = np.einsum(
             "spc,p->sc",
-            samples[:, :, g_idx, :],   # (n_draws, n_precincts, n_cands)
+            samples[:, :, g_idx, :],
             group_pop
-        ) / total_group_pop            # -> (n_draws, n_cands)
+        ) / total_group_pop
 
         mean_support   = draw_support.mean(axis=0)
         draw_coc       = draw_support.argmax(axis=1)
@@ -285,7 +331,7 @@ for elec_key in active_elections:
 
     # -- 3. prec_count_quants -------------------------------------------------
     print("  Computing precinct count quantiles...")
-    octile_probs = np.arange(1, 9) / 8   # 0.125, 0.25, ..., 1.0
+    octile_probs = np.arange(1, 9) / 8
 
     for g_idx, group in enumerate(GROUP_LABELS):
         group_pop = sub[GROUP_COLS[g_idx]].values * precinct_pops_ei
@@ -309,23 +355,30 @@ for elec_key in active_elections:
 
     print(f"  Done: {elec_key}")
 
+    # -- Incremental save after each election ---------------------------------
+    print("  Saving incremental outputs...")
+    pd.DataFrame(statewide_rows).to_csv(STATEWIDE_CSV, index=False)
+    pd.concat(mean_counts_list, ignore_index=True).to_csv(MEAN_CSV, index=False)
+    pd.concat(quant_counts_list, ignore_index=True).to_csv(QUANT_CSV, index=False)
+    print("  Saved.")
+
     # Free memory before next election
-    del ei, samples_all, samples, vote_counts, votes_fracs, group_fractions
+    del ei, samples_all, samples, vote_counts, abstain_counts, votes_fracs, group_fractions
     gc.collect()
 
-# -- Write outputs -------------------------------------------------------------
-print("\nWriting outputs to ei_outputs/...")
+# -- Final write (also serves as confirmation all elections completed) ---------
+print("\nWriting final outputs to ei_outputs/...")
 
 statewide_df = pd.DataFrame(statewide_rows)
-statewide_df.to_csv("ei_outputs/statewide_rxc_EI_preferences.csv", index=False)
+statewide_df.to_csv(STATEWIDE_CSV, index=False)
 print(f"  statewide_rxc_EI_preferences.csv: {len(statewide_df)} rows")
 
 mean_df = pd.concat(mean_counts_list, ignore_index=True)
-mean_df.to_csv("ei_outputs/mean_prec_vote_counts.csv", index=False)
+mean_df.to_csv(MEAN_CSV, index=False)
 print(f"  mean_prec_vote_counts.csv: {len(mean_df)} rows")
 
 quant_df = pd.concat(quant_counts_list, ignore_index=True)
-quant_df.to_csv("ei_outputs/prec_count_quants.csv", index=False)
+quant_df.to_csv(QUANT_CSV, index=False)
 print(f"  prec_count_quants.csv: {len(quant_df)} rows")
 
 print("\n=== EI complete ===")
