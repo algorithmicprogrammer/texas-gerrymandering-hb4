@@ -18,21 +18,25 @@ Inputs (all in same directory as this script):
 Outputs written to ei_outputs/:
   statewide_rxc_EI_preferences.csv   — statewide candidate-of-choice by group
   mean_prec_vote_counts.csv          — precinct-level mean vote count by race
-  prec_count_quants.csv              — precinct-level octile quantiles by race
+  prec_count_quants_colab.csv              — precinct-level octile quantiles by race
+  trace_<elec_key>.nc                — per-election ArviZ trace checkpoint
+                                       (safe to delete after all CSVs are final)
 
 Run:
-  pip install pyei
-  python run_ei.py
+  XLA_PYTHON_CLIENT_PREALLOCATE=false python run_ei.py
 """
 
 # -- Must be set before any JAX/PyMC imports ----------------------------------
+import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"   # prevent JAX grabbing all GPU VRAM upfront
+
 import jax
-jax.config.update("jax_enable_x64", False)
+jax.config.update("jax_enable_x64", False)              # float32 halves the postprocessing tensor size
 
 from texas_gerrymandering_hb4.config import DROPPED_ELECS, RECENCY_WEIGHTS, TX_ELECTIONS, PRECINCT_DATASET_CSV
 
-import os
 import gc
+import arviz as az
 import numpy as np
 import pandas as pd
 from pyei.r_by_c import RowByColumnEI
@@ -41,11 +45,11 @@ import pytensor
 
 # -- MCMC settings (match paper: ~1000 effective draws) -----------------------
 DRAWS       = 1000    # posterior draws to keep per chain
-TUNE        = 100000    # tuning/burn-in steps
+TUNE        = 100000  # tuning/burn-in steps
 CHAINS      = 1       # number of chains
 RANDOM_SEED = 42
 
-# -- Demographic group columns (R=4, must sum to 1 per precinct) --------------
+# -- Demographic group columns (R=5, must sum to 1 per precinct) --------------
 GROUP_COLS   = ["hisp_prop", "black_prop", "white_prop", "asian_prop", "amin_prop"]
 GROUP_LABELS = ["Hispanic", "Black", "White", "Asian", "AMIN"]
 
@@ -157,7 +161,7 @@ os.makedirs("ei_outputs", exist_ok=True)
 # -- Resume logic: load any previously saved outputs --------------------------
 STATEWIDE_CSV = "ei_outputs/statewide_rxc_EI_preferences.csv"
 MEAN_CSV      = "ei_outputs/mean_prec_vote_counts.csv"
-QUANT_CSV     = "ei_outputs/prec_count_quants.csv"
+QUANT_CSV     = "ei_outputs/prec_count_quants_colab.csv"
 
 if os.path.exists(STATEWIDE_CSV):
     statewide_df_existing = pd.read_csv(STATEWIDE_CSV)
@@ -226,7 +230,7 @@ for elec_key in active_elections:
     # within each precinct). So each COLUMN must sum to 1.
 
     # Step 1: build row-normalised (n_precincts, n_groups), then transpose
-    gf_rows = sub[GROUP_COLS].fillna(0).values.astype(float)
+    gf_rows  = sub[GROUP_COLS].fillna(0).values.astype(float)
     row_sums = gf_rows.sum(axis=1, keepdims=True)
     row_sums = np.where(row_sums == 0, 1, row_sums)
     gf_rows  = gf_rows / row_sums
@@ -254,20 +258,48 @@ for elec_key in active_elections:
 
     all_labels = cand_cols + ["Abstain"]
 
-    print(f"  Fitting RxC EI (draws={DRAWS}, tune={TUNE}, chains={CHAINS})...")
+    # -- Fit or reload from trace checkpoint -----------------------------------
+    TRACE_PATH = f"ei_outputs/trace_{elec_key}.nc"
 
     ei = RowByColumnEI(model_name="multinomial-dirichlet")
-    ei.fit(
-        group_fractions          = group_fractions,
-        votes_fractions          = votes_fracs,
-        precinct_pops            = precinct_pops_ei,
-        demographic_group_labels = GROUP_LABELS,
-        candidate_labels         = all_labels,
-        draws                    = DRAWS,
-        tune                     = TUNE,
-        chains                   = CHAINS,
-        random_seed              = RANDOM_SEED,
-    )
+
+    if os.path.exists(TRACE_PATH):
+        # Sampling completed on a prior crashed run — reload trace, skip MCMC
+        print(f"  Found trace checkpoint, reloading from {TRACE_PATH} (skipping MCMC)...")
+        # Minimal fit to initialise the model object so sim_trace assignment is valid
+        ei.fit(
+            group_fractions          = group_fractions,
+            votes_fractions          = votes_fracs,
+            precinct_pops            = precinct_pops_ei,
+            demographic_group_labels = GROUP_LABELS,
+            candidate_labels         = all_labels,
+            draws                    = 1,
+            tune                     = 100,
+            chains                   = CHAINS,
+            random_seed              = RANDOM_SEED,
+            nuts_sampler_kwargs      = {"postprocessing_backend": "cpu"},
+        )
+        ei.sim_trace = az.from_netcdf(TRACE_PATH)
+        print(f"  Trace reloaded.")
+    else:
+        print(f"  Fitting RxC EI (draws={DRAWS}, tune={TUNE}, chains={CHAINS})...")
+        ei.fit(
+            group_fractions          = group_fractions,
+            votes_fractions          = votes_fracs,
+            precinct_pops            = precinct_pops_ei,
+            demographic_group_labels = GROUP_LABELS,
+            candidate_labels         = all_labels,
+            draws                    = DRAWS,
+            tune                     = TUNE,
+            chains                   = CHAINS,
+            random_seed              = RANDOM_SEED,
+            nuts_sampler_kwargs      = {"postprocessing_backend": "cpu"},
+        )
+        # Save trace to disk immediately — before any downstream processing
+        # that could crash. On re-run this checkpoint is reloaded above.
+        print(f"  Saving trace checkpoint to {TRACE_PATH}...")
+        ei.sim_trace.to_netcdf(TRACE_PATH)
+        print(f"  Trace saved.")
 
     # -- Extract posterior samples ---------------------------------------------
     samples_all = np.transpose(
@@ -379,7 +411,7 @@ print(f"  mean_prec_vote_counts.csv: {len(mean_df)} rows")
 
 quant_df = pd.concat(quant_counts_list, ignore_index=True)
 quant_df.to_csv(QUANT_CSV, index=False)
-print(f"  prec_count_quants.csv: {len(quant_df)} rows")
+print(f"  prec_count_quants_colab.csv: {len(quant_df)} rows")
 
 print("\n=== EI complete ===")
 print("Next: fill in ingroup_weight.csv using statewide_rxc_EI_preferences.csv,")
