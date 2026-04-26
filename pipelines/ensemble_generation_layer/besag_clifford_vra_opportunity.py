@@ -57,7 +57,11 @@ from functools import partial
 import operator
 import multiprocessing as mp
 
-from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT
+from texas_gerrymandering_hb4.config import (
+    TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT,
+    INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT,
+    RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT, PRECINCT_DATASET_PARQUET,
+)
 
 # NOTE: gerrychain.random was deprecated. Per gerrychain release notes, the
 # library now hooks directly into Python's stdlib `random` module, so seeding
@@ -98,19 +102,17 @@ EFFECTIVENESS_CUTOFF = 0.6  # kept for legacy comparison columns only
 
 NUM_DISTRICTS   = 38
 POP_TOL         = 0.01
-PLOT_PATH       = 'TX_VTDs/TX_VTDs.shp'
+PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
 
-TOT_POP         = 'TOTPOP_x'
-WHITE_POP       = 'NH_WHITE'
-CVAP            = "1_2018"
-WCVAP           = "7_2018"
-HCVAP           = "13_2018"
-BCVAP           = "5_2018"
+TOT_POP         = 'TOTALPOP'
+CVAP            = 'CVAP'
+WCVAP           = 'WCVAP'
+HCVAP           = 'HCVAP'
+BCVAP           = 'BCVAP'
 GEO_ID          = 'CNTYVTD'
-COUNTY_SPLIT_ID = "CNTY_x"
-C_X             = "C_X"
-C_Y             = "C_Y"
+C_X             = 'C_X'
+C_Y             = 'C_Y'
 
 if not os.path.exists(DIR + 'outputs'):
     os.mkdir(DIR + 'outputs')
@@ -122,27 +124,36 @@ if not os.path.exists(DIR + 'outputs'):
 print("Loading data...")
 
 elec_data        = pd.read_csv(TX_ELECTIONS)
-TX_columns       = list(pd.read_csv("TX_columns.csv")["Columns"])
 dropped_elecs    = pd.read_csv(DROPPED_ELECS)["Dropped Elections"]
 recency_weights  = pd.read_csv(RECENCY_WEIGHTS)
 min_cand_weights = pd.read_csv(INGROUP_WEIGHT_CSV_FILE)
 cand_race_table  = pd.read_csv(CANDIDATE_RACE_PARTY)
 EI_statewide     = pd.read_csv(STATEWIDE_RXC_EI_PREFERENCES_INPUT)
-prec_ei_df       = pd.read_csv(PREC_COUNT_QUANTS_INPUT,     dtype={'CNTYVTD': 'str'})
-mean_prec_counts = pd.read_csv(MEAN_PREC_VOTE_COUNTS_INPUT, dtype={'CNTYVTD': 'str'})
-logit_params     = pd.read_csv('TX_logit_params.csv')
+prec_ei_df       = pd.read_csv(PREC_COUNT_QUANTS_INPUT,     dtype={GEO_ID: 'str'})
+mean_prec_counts = pd.read_csv(MEAN_PREC_VOTE_COUNTS_INPUT, dtype={GEO_ID: 'str'})
 
-# ---- shapefile ----
-state_gdf = gpd.read_file(PLOT_PATH)
-state_gdf["CD"]        = state_gdf["CD"].astype('int')
-state_gdf["Seed_Demo"] = state_gdf["Seed_Demo"].astype('int')
-state_gdf.columns      = state_gdf.columns.str.replace("-", "_")
-state_gdf_cols         = list(state_gdf.columns)
-cand1_index = state_gdf_cols.index('RomneyR_12')
-cand2_index = state_gdf_cols.index('ObamaD_12P')
-state_gdf_cols[cand1_index:cand2_index + 1] = TX_columns
-state_gdf.columns = state_gdf_cols
-state_df = pd.DataFrame(state_gdf).drop(['geometry'], axis=1)
+# TX_logit_params.csv is optional; when absent we run compute_final_dist with
+# logit=False so the unscaled VRA opportunity score is used directly.
+_logit_params_path = os.path.join(DIR, 'TX_logit_params.csv')
+if os.path.exists(_logit_params_path):
+    logit_params = pd.read_csv(_logit_params_path)
+    USE_LOGIT = True
+else:
+    print(f"  TX_logit_params.csv not found at '{_logit_params_path}'; "
+          "running with logit=False.")
+    logit_params = None
+    USE_LOGIT = False
+
+# ---- precinct dataset (geoparquet from data engineering layer) ----
+state_gdf = gpd.read_parquet(PLOT_PATH)
+state_gdf["CD"]   = state_gdf["CD"].astype('int')
+state_gdf.columns = state_gdf.columns.str.replace("-", "_")
+
+# Candidate vote-count column list, sourced from the canonical candidate table
+# rather than a separate TX_columns.csv. Restrict to columns actually present
+# in the precinct dataset.
+elec_cand_list    = [c for c in cand_race_table["Candidates"].astype(str)
+                     if c in state_gdf.columns]
 
 # ---- graph ----
 graph = Graph.from_geodataframe(state_gdf)
@@ -160,7 +171,6 @@ elections       = list(elec_data_trunc["Election"])
 general_elecs   = list(elec_data_trunc[elec_data_trunc["Type"] == 'General'].Election)
 primary_elecs   = list(elec_data_trunc[elec_data_trunc["Type"] == 'Primary'].Election)
 runoff_elecs    = list(elec_data_trunc[elec_data_trunc["Type"] == 'Runoff'].Election)
-elec_cand_list  = TX_columns
 
 elec_set_dict = {}
 for elec_set in elec_sets:
@@ -310,7 +320,7 @@ def final_elec_model(partition):
         neither_weight_state, black_weight_state, hisp_weight_state,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, "statewide", partition,
-        logit_params, logit=True
+        logit_params, logit=USE_LOGIT
     )
 
     # equal mode
@@ -320,7 +330,7 @@ def final_elec_model(partition):
         neither_weight_equal, black_weight_equal, hisp_weight_equal,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, "equal", partition,
-        logit_params, logit=True
+        logit_params, logit=USE_LOGIT
     )
 
     # district mode
@@ -340,7 +350,7 @@ def final_elec_model(partition):
         neither_weight_dist, black_weight_dist, hisp_weight_dist,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, 'district', partition,
-        logit_params, logit=True
+        logit_params, logit=USE_LOGIT
     )
 
     if partition.parent is None:
@@ -485,15 +495,15 @@ def _build_updaters():
         "cut_edges":  cut_edges,
         "final_elec_model": final_elec_model,
     }
+    # Benchmark general elections that exist in the 2024 schema. The original
+    # 2012/2016/2018 benchmark candidates are not in the precinct dataset.
     benchmark = [
-        Election("PRES16", {"Democratic": 'ClintonD_16G_President',
-                             "Republican": 'TrumpR_16G_President'}, alias="PRES16"),
-        Election("PRES12", {"Democratic": 'ObamaD_12G_President',
-                             "Republican": 'RomneyR_12G_President'}, alias="PRES12"),
-        Election("SEN18",  {"Democratic": "ORourkeD_18G_US_Sen",
-                             "Republican": 'CruzR_18G_US_Sen'},       alias="SEN18"),
-        Election("GOV18",  {"Democratic": "ValdezD_18G_Governor",
-                             "Republican": 'AbbottR_18G_Governor'},    alias="GOV18"),
+        Election("PRES24G", {"Democratic": 'HarrisD_24G',
+                              "Republican": 'TrumpR_24G'},     alias="PRES24G"),
+        Election("SEN24G",  {"Democratic": 'AllredD_24G',
+                              "Republican": 'CruzR_24G'},      alias="SEN24G"),
+        Election("RRC24G",  {"Democratic": 'CulbertD_24G',
+                              "Republican": 'CraddickR_24G'},  alias="RRC24G"),
     ]
     my_updaters.update({e.name: e for e in benchmark})
     my_updaters.update({e.name: e for e in [Election(j, candidates[j]) for j in elections]})
