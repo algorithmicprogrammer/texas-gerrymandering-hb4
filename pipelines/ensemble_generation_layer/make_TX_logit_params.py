@@ -65,8 +65,7 @@ from texas_gerrymandering_hb4.config import (
     DROPPED_ELECS,
     STATEWIDE_RXC_EI_PREFERENCES_INPUT,
     RECENCY_WEIGHTS,
-    MEAN_PREC_VOTE_COUNTS_INPUT,
-    PRECINCT_DATASET_PARQUET
+    PRECINCT_DATASET_PARQUET,
 )
 
 from run_functions import (
@@ -84,7 +83,6 @@ from run_functions import (
 # ---------------------------------------------------------------------
 NUM_DISTRICTS = 38
 PLOT_PATH = PRECINCT_DATASET_PARQUET
-DIR = ""
 
 TOT_POP = "TOTPOP_x"
 CVAP = "1_2018"
@@ -158,9 +156,8 @@ def load_project_data():
     cand_race_table = pd.read_csv(CANDIDATE_RACE_PARTY)
     EI_statewide = pd.read_csv(STATEWIDE_RXC_EI_PREFERENCES_INPUT)
     prec_ei_df = pd.read_csv(PREC_COUNT_QUANTS_INPUT, dtype={GEO_ID: "str"})
-    logit_params_path = Path("TX_logit_params.csv")
 
-    state_gdf = gpd.read_file(PLOT_PATH)
+    state_gdf = gpd.read_parquet(PLOT_PATH)
     state_gdf["CD"] = state_gdf["CD"].astype(int)
     if "Seed_Demo" in state_gdf.columns:
         state_gdf["Seed_Demo"] = state_gdf["Seed_Demo"].astype(int)
