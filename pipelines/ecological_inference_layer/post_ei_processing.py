@@ -7,22 +7,26 @@ run_functions.py / TX_elections_model.py.
 Run this after run_ei.py finishes:
     python post_ei_processing.py
 
-Inputs  (from ei_outputs/):
-    statewide_rxc_EI_preferences.csv
-    prec_count_quants.csv
-    mean_prec_vote_counts.csv          (optional — only needed for district mode)
+Inputs  (paths from texas_gerrymandering_hb4.config):
+    STATEWIDE_RXC_EI_PREFERENCES_CSV
+    PREC_COUNT_QUANTS_CSV
+    MEAN_PREC_VOTE_COUNTS_CSV          (only needed for district mode)
 
 Outputs (written to recom_inputs/):
     statewide_rxc_EI_preferences.csv   — renamed/remapped columns
-    prec_count_quants.csv              — pivoted to wide composite-column format
+    prec_count_quants_colab.csv        — pivoted to wide composite-column format
     mean_prec_vote_counts.csv          — pivoted to wide composite-column format
     ingroup_weight.csv                 — derived W2 weights
 
 Edit GROUP_MAP and WEIGHT_VALUES below to match your setup.
 """
+from texas_gerrymandering_hb4.config import (
+    MEAN_PREC_VOTE_COUNTS_CSV,
+    PREC_COUNT_QUANTS_CSV,
+    STATEWIDE_RXC_EI_PREFERENCES_CSV,
+)
 
 import os
-import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -50,9 +54,17 @@ WEIGHT_VALUES = {
     "Partial ":          0.75,   # trailing space intentional — matches run_functions.py key
 }
 
-# Octile probability -> integer label used in the wide column names.
+# Quantile probability -> integer label used in the wide column names.
 # run_functions.py uses 0,125,250,375,500,625,750,875,1000 (per-mille, i.e. *1000).
+#
+# NOTE on the .0 floor: the {base}.0 column is the additive floor of the
+# simulated draw in cand_pref_all_draws_outcomes, NOT zero by definition. If
+# your run_ei.py emits a quantile==0.0 row, it will be picked up and pivoted
+# naturally. If it does not, missing .0 columns are filled with zeros AFTER
+# warning you — this biases the draw floor downward and should be fixed at
+# the EI step when accurate floors matter.
 OCTILE_PERMILLE = {
+    0.000: 0,
     0.125: 125,
     0.250: 250,
     0.375: 375,
@@ -63,19 +75,19 @@ OCTILE_PERMILLE = {
     1.000: 1000,
 }
 
-IN_DIR  = "ei_outputs"
 OUT_DIR = "recom_inputs"
 os.makedirs(OUT_DIR, exist_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # 1. statewide_rxc_EI_preferences.csv
 # ---------------------------------------------------------------------------
 # run_functions.py queries: EI_statewide["Election"], ["Demog"], ["Candidate"], ["prob"]
-# your EI produces:         election, group, candidate_of_choice, frac_draws_preferred
+# run_ei.py produces:        election, group, candidate_of_choice, frac_draws_preferred
 
 print("Reshaping statewide_rxc_EI_preferences.csv ...")
 
-sw = pd.read_csv(os.path.join(IN_DIR, "statewide_rxc_EI_preferences.csv"))
+sw = pd.read_csv(STATEWIDE_RXC_EI_PREFERENCES_CSV)
 
 # Keep only groups the chain needs
 sw = sw[sw["group"].isin(GROUP_MAP.keys())].copy()
@@ -90,22 +102,17 @@ sw_out = pd.DataFrame({
 sw_out.to_csv(os.path.join(OUT_DIR, "statewide_rxc_EI_preferences.csv"), index=False)
 print(f"  Written: {len(sw_out)} rows")
 
+
 # ---------------------------------------------------------------------------
-# 2. prec_count_quants.csv  (long -> wide)
+# 2. prec_count_quants_colab.csv  (long -> wide)
 # ---------------------------------------------------------------------------
 # run_functions.py column naming pattern:
 #   {CVAP_KEY}.{election}_{candidate}.{permille}
-# e.g.  BCVAP.24P_SenD_AllredD_24P.125
-#
-# The leading ".0" column (the intercept / baseline) is the minimum quantile
-# anchor; run_functions.py accesses base + '.0' as the floor value.
+# e.g.  BCVAP.24P_SenD_AllredD.125
 
-print("Pivoting prec_count_quants.csv ...")
+print("Pivoting prec_count_quants_colab.csv ...")
 
-qdf = pd.read_csv(
-    os.path.join(IN_DIR, "prec_count_quants.csv"),
-    dtype={"CNTYVTD": str},
-)
+qdf = pd.read_csv(PREC_COUNT_QUANTS_CSV, dtype={"CNTYVTD": str})
 
 # Keep only groups that appear in GROUP_MAP
 qdf = qdf[qdf["group"].isin(GROUP_MAP.keys())].copy()
@@ -114,42 +121,66 @@ qdf["cvap_key"] = qdf["group"].map(GROUP_MAP)
 # Build composite base key: "{CVAP_KEY}.{election}_{candidate}"
 qdf["base_col"] = qdf["cvap_key"] + "." + qdf["election"] + "_" + qdf["candidate"]
 
-# Map quantile probability -> permille integer
-# Round to 3 dp to avoid float comparison noise
-qdf["permille"] = qdf["quantile"].round(3).map(
-    {round(k, 3): v for k, v in OCTILE_PERMILLE.items()}
-)
+# Map quantile probability -> permille integer.
+# Round to 3 dp to avoid float-comparison noise.
+permille_map = {round(k, 3): v for k, v in OCTILE_PERMILLE.items()}
+qdf["permille"] = qdf["quantile"].round(3).map(permille_map)
 
+# Diagnose unrecognised quantiles before dropping.
+n_total = len(qdf)
 missing_octiles = qdf["permille"].isna().sum()
 if missing_octiles > 0:
-    print(f"  WARNING: {missing_octiles} rows had unrecognised quantile values — dropped.")
+    bad_vals = sorted(qdf.loc[qdf["permille"].isna(), "quantile"].unique())
+    print(
+        f"  WARNING: {missing_octiles}/{n_total} rows had unrecognised quantile values "
+        f"(e.g. {bad_vals[:5]}). Dropping them."
+    )
     qdf = qdf.dropna(subset=["permille"])
 
-qdf["permille"] = qdf["permille"].astype(int)
+if len(qdf) == 0:
+    raise ValueError(
+        "After mapping quantiles to OCTILE_PERMILLE, no rows remain. "
+        "Check that the 'quantile' column in your EI output uses values from "
+        f"{sorted(OCTILE_PERMILLE.keys())}."
+    )
 
-# Pivot: one row per CNTYVTD, columns = base_col + "." + permille
+qdf["permille"] = qdf["permille"].astype(int)
 qdf["full_col"] = qdf["base_col"] + "." + qdf["permille"].astype(str)
 
-wide_q = qdf.pivot_table(
-    index="CNTYVTD",
-    columns="full_col",
-    values="value",
-    aggfunc="first",
-).reset_index()
+# Detect duplicate (CNTYVTD, full_col) pairs loudly rather than silently dropping.
+dup_mask = qdf.duplicated(subset=["CNTYVTD", "full_col"], keep=False)
+if dup_mask.any():
+    dup_examples = qdf.loc[dup_mask, ["CNTYVTD", "full_col"]].head(5)
+    raise ValueError(
+        f"Found {dup_mask.sum()} duplicate (CNTYVTD, column) rows in prec_count_quants. "
+        f"First few:\n{dup_examples}"
+    )
+
+wide_q = qdf.pivot(index="CNTYVTD", columns="full_col", values="value").reset_index()
 wide_q.columns.name = None
 
-# Add the ".0" baseline column (the octile-0 floor = 0 by definition for count data)
-# run_functions.py does:  dist_prec_quant[base + '.' + '0']  as the starting floor
+# If run_ei.py did not emit a quantile==0.0 row, fill the missing .0 columns
+# with zeros and warn — this biases the simulated draw floor downward.
 base_cols = sorted(set(qdf["base_col"].unique()))
+filled_zero_floors = []
 for bc in base_cols:
     col0 = bc + ".0"
     if col0 not in wide_q.columns:
         wide_q[col0] = 0.0
+        filled_zero_floors.append(col0)
+
+if filled_zero_floors:
+    print(
+        f"  WARNING: {len(filled_zero_floors)} base columns had no quantile==0.0 row "
+        f"in the EI output; filling their '.0' floor with 0. "
+        f"Examples: {filled_zero_floors[:3]}"
+    )
 
 wide_q = wide_q.sort_index(axis=1)   # sort columns alphabetically for readability
 
-wide_q.to_csv(os.path.join(OUT_DIR, "prec_count_quants.csv"), index=False)
+wide_q.to_csv(os.path.join(OUT_DIR, "prec_count_quants_colab.csv"), index=False)
 print(f"  Written: {len(wide_q)} rows x {len(wide_q.columns)} columns")
+
 
 # ---------------------------------------------------------------------------
 # 3. mean_prec_vote_counts.csv  (long -> wide)
@@ -159,10 +190,7 @@ print(f"  Written: {len(wide_q)} rows x {len(wide_q.columns)} columns")
 
 print("Pivoting mean_prec_vote_counts.csv ...")
 
-mdf = pd.read_csv(
-    os.path.join(IN_DIR, "mean_prec_vote_counts.csv"),
-    dtype={"CNTYVTD": str},
-)
+mdf = pd.read_csv(MEAN_PREC_VOTE_COUNTS_CSV, dtype={"CNTYVTD": str})
 
 mdf = mdf[mdf["group"].isin(GROUP_MAP.keys())].copy()
 mdf["cvap_key"] = mdf["group"].map(GROUP_MAP)
@@ -172,16 +200,20 @@ mdf["col_name"] = (
     mdf["cvap_key"] + "." + mdf["election"] + "_" + mdf["candidate"] + "_counts"
 )
 
-wide_m = mdf.pivot_table(
-    index="CNTYVTD",
-    columns="col_name",
-    values="mean_count",
-    aggfunc="first",
-).reset_index()
+dup_mask_m = mdf.duplicated(subset=["CNTYVTD", "col_name"], keep=False)
+if dup_mask_m.any():
+    dup_examples = mdf.loc[dup_mask_m, ["CNTYVTD", "col_name"]].head(5)
+    raise ValueError(
+        f"Found {dup_mask_m.sum()} duplicate (CNTYVTD, column) rows in mean_prec_vote_counts. "
+        f"First few:\n{dup_examples}"
+    )
+
+wide_m = mdf.pivot(index="CNTYVTD", columns="col_name", values="mean_count").reset_index()
 wide_m.columns.name = None
 
 wide_m.to_csv(os.path.join(OUT_DIR, "mean_prec_vote_counts.csv"), index=False)
 print(f"  Written: {len(wide_m)} rows x {len(wide_m.columns)} columns")
+
 
 # ---------------------------------------------------------------------------
 # 4. ingroup_weight.csv
@@ -196,6 +228,7 @@ iw = pd.DataFrame([WEIGHT_VALUES])
 iw.to_csv(os.path.join(OUT_DIR, "ingroup_weight.csv"), index=False)
 print(f"  Written with keys: {list(iw.columns)}")
 
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
@@ -203,7 +236,7 @@ print(f"""
 === Done ===
 Files written to {OUT_DIR}/:
   statewide_rxc_EI_preferences.csv   columns: Election, Demog, Candidate, prob
-  prec_count_quants.csv              wide format, {len(wide_q.columns)-1} data columns
+  prec_count_quants_colab.csv        wide format, {len(wide_q.columns)-1} data columns
   mean_prec_vote_counts.csv          wide format, {len(wide_m.columns)-1} data columns
   ingroup_weight.csv                 W2 weights
 
@@ -212,7 +245,7 @@ Next steps:
      TX_elections_model.py working directory.
   2. Update TX_elections_model.py:
        - EI_statewide = pd.read_csv("recom_inputs/statewide_rxc_EI_preferences.csv")
-       - prec_ei_df   = pd.read_csv("recom_inputs/prec_count_quants.csv", dtype={{'CNTYVTD':'str'}})
+       - prec_ei_df   = pd.read_csv("recom_inputs/prec_count_quants_colab.csv", dtype={{'CNTYVTD':'str'}})
        - mean_prec_counts = pd.read_csv("recom_inputs/mean_prec_vote_counts.csv", dtype={{'CNTYVTD':'str'}})
        - min_cand_weights = pd.read_csv("recom_inputs/ingroup_weight.csv")
   3. Update elections_track in TX_elections_model.py to reference your 2024
