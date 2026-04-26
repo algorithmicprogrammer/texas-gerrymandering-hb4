@@ -189,12 +189,17 @@ def compute_final_dist(map_winners, black_pref_cands_df, black_pref_cands_runoff
                  hisp_pref_cands_df, hisp_pref_cands_runoffs, neither_weight_array, \
                  black_weight_array, hisp_weight_array, dist_elec_results, dist_changes,
                  cand_race_table, num_districts, candidates, \
-                 elec_sets, elec_set_dict, mode, partition, logit_params, logit = False):
-    
+                 elec_sets, elec_set_dict, mode, partition, logit_params, logit = False,
+                 return_raw = False):
+
     """
-    Returns (Latino, Black, Neither, Overlap) effectiveness distribution for each district. 
-    The four values sum to one. State-specific rules governing what counts as a "win" for 
+    Returns (Latino, Black, Neither, Overlap) effectiveness distribution for each district.
+    The four values sum to one. State-specific rules governing what counts as a "win" for
     an election set are coded here (for example, rules about advancing to runoff elections etc.).
+
+    If return_raw=True, returns {district: (hisp_vra_prob, black_vra_prob, neither_vra_prob)}
+    BEFORE the logit and the venn-diagram overlap step. This is the quantity that the logit
+    in TX_logit_params.csv calibrates against, so it is what you want when fitting calibration.
     """
     general_winners = map_winners[map_winners["Election Type"] == 'General'].reset_index(drop = True)
     primary_winners = map_winners[map_winners["Election Type"] == 'Primary'].reset_index(drop = True)
@@ -299,8 +304,11 @@ def compute_final_dist(map_winners, black_pref_cands_df, black_pref_cands_runoff
     hisp_gc = [min(1,(partition["HCVAP"][i]/partition["CVAP"][i])*2) for i in sorted(dist_changes)]
     hisp_vra_prob = [i*j for i,j in zip(hisp_vra_elec_wins, hisp_gc)]
     
-    neither_vra_prob = list(np.sum(neither_points_accrued, axis = 0)/np.sum(neither_weight_array, axis = 0))                 
-  
+    neither_vra_prob = list(np.sum(neither_points_accrued, axis = 0)/np.sum(neither_weight_array, axis = 0))
+
+    if return_raw:
+        return dict(zip(dist_changes, zip(hisp_vra_prob, black_vra_prob, neither_vra_prob)))
+
     #feed through logit:
     if logit == True:
         logit_coef_black = logit_params.loc[(logit_params['model_type'] == mode) & (logit_params['subgroup'] == 'Black'), 'coef'].values[0]
