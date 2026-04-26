@@ -52,10 +52,17 @@ PRECINCT_DATASET_CSV = PROCESSED_DATA_DIR/"tx_cvap_for_ei.csv"
 
 PIPELINES_DIR = PROJ_ROOT / "pipelines"
 ECOLOGICAL_INFERENCE_LAYER_DIR = PIPELINES_DIR / "ecological_inference_layer"
+
 EI_OUTPUTS_DIR = ECOLOGICAL_INFERENCE_LAYER_DIR / "ei_outputs"
 MEAN_PREC_VOTE_COUNTS_CSV = EI_OUTPUTS_DIR / "mean_prec_vote_counts.csv"
 PREC_COUNT_QUANTS_CSV = EI_OUTPUTS_DIR / "prec_count_quants.csv"
 STATEWIDE_RXC_EI_PREFERENCES_CSV = EI_OUTPUTS_DIR / "statewide_rxc_EI_preferences.csv"
+
+RECOM_INPUTS_DIR = ECOLOGICAL_INFERENCE_LAYER_DIR / "recom_inputs"
+INGROUP_WEIGHT_CSV_FILE = RECOM_INPUTS_DIR / "ingroup_weight.csv"
+MEAN_PREC_VOTE_COUNTS_INPUT = RECOM_INPUTS_DIR / "mean_prec_vote_counts.csv"
+PREC_COUNT_QUANTS_INPUT = RECOM_INPUTS_DIR / "prec_count_quants.csv"
+STATEWIDE_RXC_EI_PREFERENCES_INPUT = RECOM_INPUTS_DIR / "statewide_rxc_EI_preferences.csv"
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
