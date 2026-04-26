@@ -97,7 +97,7 @@ EFFECTIVENESS_CUTOFF = 0.6  # kept for legacy comparison columns only
 # FIXED PARAMETERS
 # ============================================================
 
-NUM_DISTRICTS   = 36
+NUM_DISTRICTS   = 38
 POP_TOL         = 0.01
 PLOT_PATH       = 'TX_VTDs/TX_VTDs.shp'
 DIR             = ''
