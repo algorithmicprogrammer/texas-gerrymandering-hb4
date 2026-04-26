@@ -9,12 +9,19 @@ raw_prob, is_opportunity) table that fits the per-(mode, group) logistic
 calibration in the spirit of MGGG's VRA-Ensembles paper.
 
 Usage:
-    # First run with a placeholder --benchmark-elec to see the list of available
-    # general elections, then re-run with one of them:
+    # Single benchmark (run with a placeholder --benchmark-elec first to see
+    # the list of available general elections):
     python build_calibration_data.py \
         --benchmark-elec <one-of-general_elecs> \
         --black-cand AllredD_24G \
         --latino-cand AllredD_24G \
+        --output calibration.csv
+
+    # Multiple benchmarks pooled in one run (raw probs computed once, labels
+    # recomputed per benchmark). Provide a CSV with columns:
+    #   benchmark_elec,black_cand,latino_cand
+    python build_calibration_data.py \
+        --benchmarks-csv benchmarks.csv \
         --output calibration.csv
 
 Then:
@@ -26,11 +33,13 @@ Notes
 -----
 - "raw_prob" comes from compute_final_dist(..., logit=False, return_raw=True),
   which yields the unsquashed black_vra_prob / hisp_vra_prob / neither_vra_prob.
-- "is_opportunity" is computed from a single benchmark general election. The
-  Black/Latino label is 1 iff that group's named candidate won the district;
-  the Neither label is 1 iff the named candidate LOST. To replicate the paper's
-  multi-election pooling, run this script for several benchmarks and concatenate
-  the outputs before fitting.
+  Raw probs depend only on the enacted plan, not on the benchmark, so when
+  multiple benchmarks are passed they are computed once and reused.
+- "is_opportunity" is computed per benchmark general election. The Black/Latino
+  label is 1 iff that group's named candidate won the district; the Neither
+  label is 1 iff neither minority's named candidate won.
+- The output CSV always carries a benchmark_elec column for traceability;
+  generate_tx_logit_params.py ignores extra columns.
 - This driver replicates the loader in besag_clifford_vra_opportunity.py rather
   than importing it, because that module reads TX_logit_params.csv at import
   time and we are bootstrapping it here.
@@ -198,7 +207,7 @@ def load_pipeline_state():
     )
 
 
-def build_enacted_partition(s, benchmark_elec, black_cand, latino_cand):
+def build_enacted_partition(s):
     """Build the enacted GeographicPartition with per-election updaters."""
     my_updaters = {
         "population": updaters.Tally(TOT_POP, alias="population"),
@@ -210,27 +219,29 @@ def build_enacted_partition(s, benchmark_elec, black_cand, latino_cand):
         "Sum_CY": updaters.Tally(C_Y, alias="Sum_CY"),
         "cut_edges": cut_edges,
     }
-    # Election updaters for every elec compute_final_dist needs.
     my_updaters.update({
         e.name: e for e in [Election(j, s["candidates"][j]) for j in s["elections"]]
     })
-    # Benchmark general election (used for is_opportunity labels). Added under a
-    # dedicated alias so callers can pass any general elec without colliding.
+    return GeographicPartition(graph=s["graph"], assignment="CD", updaters=my_updaters)
+
+
+def validate_benchmark(s, benchmark_elec, black_cand, latino_cand):
+    """Raise ValueError if the (benchmark_elec, black_cand, latino_cand) triple
+    doesn't match a general election in elec_data_trunc."""
     if benchmark_elec not in s["general_elecs"]:
         raise ValueError(
-            f"--benchmark-elec={benchmark_elec} is not a general election. "
+            f"benchmark_elec={benchmark_elec} is not a general election. "
             f"Pick one of: {s['general_elecs']}"
         )
     bench_cands = s["candidates"][benchmark_elec]
     if black_cand not in bench_cands.values():
         raise ValueError(
-            f"--black-cand={black_cand} is not in {benchmark_elec} candidates {list(bench_cands.values())}"
+            f"black_cand={black_cand} is not in {benchmark_elec} candidates {list(bench_cands.values())}"
         )
     if latino_cand not in bench_cands.values():
         raise ValueError(
-            f"--latino-cand={latino_cand} is not in {benchmark_elec} candidates {list(bench_cands.values())}"
+            f"latino_cand={latino_cand} is not in {benchmark_elec} candidates {list(bench_cands.values())}"
         )
-    return GeographicPartition(graph=s["graph"], assignment="CD", updaters=my_updaters)
 
 
 def per_district_winner(state_gdf, partition, elec_cand_columns, target_candidate):
@@ -348,47 +359,74 @@ def assemble_calibration_rows(raw_probs, black_wins, latino_wins):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--benchmark-elec", required=True,
-                   help="General-election name from TX_elections.csv (the script "
-                        "prints the available list before failing).")
+    p.add_argument("--benchmark-elec", default=None,
+                   help="Single benchmark general-election name from TX_elections.csv. "
+                        "Mutually exclusive with --benchmarks-csv.")
     p.add_argument("--black-cand", default="AllredD_24G",
-                   help="Black-preferred candidate column name in the benchmark election.")
+                   help="Black-preferred candidate column name in the single benchmark election.")
     p.add_argument("--latino-cand", default="AllredD_24G",
-                   help="Latino-preferred candidate column name in the benchmark election.")
+                   help="Latino-preferred candidate column name in the single benchmark election.")
+    p.add_argument("--benchmarks-csv", type=Path, default=None,
+                   help="CSV with columns benchmark_elec,black_cand,latino_cand to pool "
+                        "multiple benchmarks in one run. Raw probs are computed once.")
     p.add_argument("--output", type=Path, default=Path("calibration.csv"),
                    help="Output CSV (consumed by generate_tx_logit_params.py --input).")
     return p.parse_args()
 
 
+def resolve_benchmarks(args):
+    """Return a list of (benchmark_elec, black_cand, latino_cand) tuples."""
+    if args.benchmarks_csv is not None and args.benchmark_elec is not None:
+        raise SystemExit("Pass either --benchmark-elec or --benchmarks-csv, not both.")
+    if args.benchmarks_csv is not None:
+        df = pd.read_csv(args.benchmarks_csv)
+        required = {"benchmark_elec", "black_cand", "latino_cand"}
+        missing = required - set(df.columns)
+        if missing:
+            raise SystemExit(
+                f"--benchmarks-csv missing columns: {sorted(missing)} "
+                f"(required: {sorted(required)})"
+            )
+        return [(str(r.benchmark_elec), str(r.black_cand), str(r.latino_cand))
+                for r in df.itertuples(index=False)]
+    if args.benchmark_elec is not None:
+        return [(args.benchmark_elec, args.black_cand, args.latino_cand)]
+    raise SystemExit("Pass either --benchmark-elec or --benchmarks-csv.")
+
+
 def main():
     args = parse_args()
+    benchmarks = resolve_benchmarks(args)
+
     print("Loading pipeline state...")
     s = load_pipeline_state()
-
     print(f"Available general elections: {s['general_elecs']}")
-    benchmark_elec = args.benchmark_elec
-    if benchmark_elec not in s["elections"]:
-        raise SystemExit(
-            f"--benchmark-elec={benchmark_elec!r} is not in elec_data_trunc.Election. "
-            f"Pick one of the general elections listed above."
-        )
-    partition = build_enacted_partition(s, benchmark_elec, args.black_cand, args.latino_cand)
+
+    for elec, bcand, lcand in benchmarks:
+        validate_benchmark(s, elec, bcand, lcand)
+
+    partition = build_enacted_partition(s)
 
     print("Computing raw VRA probabilities (statewide / equal / district)...")
     raw_probs = collect_raw_probs(partition, s)
 
-    print(f"Computing is_opportunity labels from {benchmark_elec}...")
-    bench_cands = list(s["candidates"][benchmark_elec].values())
-    black_wins = per_district_winner(s["state_gdf"], partition, bench_cands, args.black_cand)
-    latino_wins = per_district_winner(s["state_gdf"], partition, bench_cands, args.latino_cand)
+    parts = []
+    for elec, bcand, lcand in benchmarks:
+        print(f"Computing is_opportunity labels from {elec} (black={bcand}, latino={lcand})...")
+        bench_cands = list(s["candidates"][elec].values())
+        black_wins = per_district_winner(s["state_gdf"], partition, bench_cands, bcand)
+        latino_wins = per_district_winner(s["state_gdf"], partition, bench_cands, lcand)
+        df = assemble_calibration_rows(raw_probs, black_wins, latino_wins)
+        df["benchmark_elec"] = elec
+        parts.append(df)
 
     print("Assembling calibration table...")
-    df = assemble_calibration_rows(raw_probs, black_wins, latino_wins)
+    out = pd.concat(parts, ignore_index=True)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(args.output, index=False)
-    print(f"Wrote {len(df)} rows to {args.output}")
-    print(df.groupby(["model_type", "subgroup"])
+    out.to_csv(args.output, index=False)
+    print(f"Wrote {len(out)} rows to {args.output}")
+    print(out.groupby(["model_type", "subgroup"])
           .agg(n=("raw_prob", "size"),
                positives=("is_opportunity", "sum"),
                raw_mean=("raw_prob", "mean")))
