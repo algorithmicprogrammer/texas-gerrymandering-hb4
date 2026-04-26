@@ -149,12 +149,6 @@ state_gdf = gpd.read_parquet(PLOT_PATH)
 state_gdf["CD"]   = state_gdf["CD"].astype('int')
 state_gdf.columns = state_gdf.columns.str.replace("-", "_")
 
-# Candidate vote-count column list, sourced from the canonical candidate table
-# rather than a separate TX_columns.csv. Restrict to columns actually present
-# in the precinct dataset.
-elec_cand_list    = [c for c in cand_race_table["Candidates"].astype(str)
-                     if c in state_gdf.columns]
-
 # ---- graph ----
 graph = Graph.from_geodataframe(state_gdf)
 graph.add_data(state_gdf)
@@ -179,14 +173,61 @@ for elec_set in elec_sets:
 
 elec_match_dict = dict(zip(elec_data_trunc["Election"], elec_data_trunc["Election Set"]))
 
+# ============================================================
+# 2024 STATEWIDE ELECTION → CANDIDATE COLUMN MAPPING
+# ============================================================
+# The MGGG VRA_ensembles workflow this file was adapted from used candidate
+# columns whose names embedded the full Election key as a substring (e.g.
+# "ClintonD_16G_President" contains "16G_President"), so a substring match
+# `elec in candidate_col` was enough to pull the right candidate set. The
+# 2024 Texas dataset built by the data engineering and EI layers uses a
+# different naming convention — candidate columns are
+# "<Lastname><Party>_24G" / "_24P", with no embedded office — so we list
+# the candidate columns per Election explicitly here. Keys must match the
+# Election column in TX_elections.csv (and the keys in
+# pipelines/ecological_inference_layer/run_ei.py::ELECTIONS).
+ELECTION_CANDIDATES_2024 = {
+    "24G_President":  ["TrumpR_24G",     "HarrisD_24G"],
+    "24G_US_Sen":     ["CruzR_24G",      "AllredD_24G"],
+    "24G_RR_Comm_1":  ["CraddickR_24G",  "CulbertD_24G"],
+    "24P_PresD": [
+        "BidenD_24P", "CornejoD_24P", "LockeD_24P", "LozadaD_24P",
+        "PerezD_24P", "PhillipsD_24P", "UygurD_24P", "WilliamsonD_24P",
+    ],
+    "24P_PresR": [
+        "BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
+        "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P", "DeSantisR_24P",
+    ],
+    "24P_SenD": [
+        "AllredD_24P", "GomezD_24P", "GonzalezD_24P", "GutierrezD_24P",
+        "HassanD_24P", "KeoughD_24P", "PrillimanD_24P", "ShermanD_24P",
+        "TchenkoD_24P",
+    ],
+    "24P_SenR":  ["CruzR_24P", "GibsonR_24P", "LopezR_24P"],
+    "24P_RRCD":  ["BurchD_24P", "CulbertD_24P"],
+    "24P_RRCR": [
+        "ClarkR_24P", "CraddickR_24P", "HowellR_24P",
+        "MatlockR_24P", "ReyesR_24P",
+    ],
+}
+
 candidates = {}
 for elec in elections:
-    cands = ([y for y in elec_cand_list if elec in y and "R_" not in y.split('1')[0]]
-             if "R_" in elec[:4] or "P_" in elec[:4]
-             else [y for y in elec_cand_list if elec in y])
+    if elec not in ELECTION_CANDIDATES_2024:
+        raise KeyError(
+            f"Election {elec!r} from TX_elections.csv is not present in "
+            f"ELECTION_CANDIDATES_2024. Add the candidate column list there "
+            f"before running."
+        )
+    cands_list = [c for c in ELECTION_CANDIDATES_2024[elec]
+                  if c in state_gdf.columns]
+    missing = [c for c in ELECTION_CANDIDATES_2024[elec] if c not in state_gdf.columns]
+    if missing:
+        print(f"  WARNING: {elec}: candidate columns not in precinct dataset, "
+              f"dropped: {missing}")
     if elec in general_elecs:
-        cands = cands[:2]
-    candidates[elec] = dict(zip(range(len(cands)), cands))
+        cands_list = cands_list[:2]
+    candidates[elec] = dict(zip(range(len(cands_list)), cands_list))
 
 cand_race_dict        = cand_race_table.set_index("Candidates").to_dict()["Race"]
 min_cand_weights_dict = {k: min_cand_weights.to_dict()[k][0]
