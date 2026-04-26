@@ -58,6 +58,8 @@ from functools import partial
 import operator
 import multiprocessing as mp
 
+from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT
+
 from gerrychain.random import random as gc_random
 from gerrychain import (
     Graph, MarkovChain, GeographicPartition,
@@ -117,15 +119,15 @@ if not os.path.exists(DIR + 'outputs'):
 
 print("Loading data...")
 
-elec_data        = pd.read_csv("TX_elections.csv")
+elec_data        = pd.read_csv(TX_ELECTIONS)
 TX_columns       = list(pd.read_csv("TX_columns.csv")["Columns"])
-dropped_elecs    = pd.read_csv("dropped_elecs.csv")["Dropped Elections"]
-recency_weights  = pd.read_csv("recency_weights.csv")
-min_cand_weights = pd.read_csv("ingroup_weight.csv")
-cand_race_table  = pd.read_csv("Candidate_Race_Party.csv")
-EI_statewide     = pd.read_csv("statewide_rxc_EI_preferences.csv")
-prec_ei_df       = pd.read_csv("prec_count_quants.csv",     dtype={'CNTYVTD': 'str'})
-mean_prec_counts = pd.read_csv("mean_prec_vote_counts.csv", dtype={'CNTYVTD': 'str'})
+dropped_elecs    = pd.read_csv(DROPPED_ELECS)["Dropped Elections"]
+recency_weights  = pd.read_csv(RECENCY_WEIGHTS)
+min_cand_weights = pd.read_csv(INGROUP_WEIGHT_CSV_FILE)
+cand_race_table  = pd.read_csv(CANDIDATE_RACE_PARTY)
+EI_statewide     = pd.read_csv(STATEWIDE_RXC_EI_PREFERENCES_INPUT)
+prec_ei_df       = pd.read_csv(PREC_COUNT_QUANTS_INPUT,     dtype={'CNTYVTD': 'str'})
+mean_prec_counts = pd.read_csv(MEAN_PREC_VOTE_COUNTS_INPUT, dtype={'CNTYVTD': 'str'})
 logit_params     = pd.read_csv('TX_logit_params.csv')
 
 # ---- shapefile ----
