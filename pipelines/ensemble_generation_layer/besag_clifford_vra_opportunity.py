@@ -57,7 +57,7 @@ from functools import partial
 import operator
 import multiprocessing as mp
 
-from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT
+from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT, PRECINCT_DATASET_PARQUET
 
 # NOTE: gerrychain.random was deprecated. Per gerrychain release notes, the
 # library now hooks directly into Python's stdlib `random` module, so seeding
@@ -98,7 +98,7 @@ EFFECTIVENESS_CUTOFF = 0.6  # kept for legacy comparison columns only
 
 NUM_DISTRICTS   = 38
 POP_TOL         = 0.01
-PLOT_PATH       = 'TX_VTDs/TX_VTDs.shp'
+PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
 
 TOT_POP         = 'TOTPOP_x'
