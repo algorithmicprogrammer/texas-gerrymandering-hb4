@@ -38,34 +38,41 @@ Notes
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import operator
-import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ENSEMBLE_LAYER = REPO_ROOT / "pipelines" / "ensemble_generation_layer"
-sys.path.insert(0, str(ENSEMBLE_LAYER))
-sys.path.insert(0, str(REPO_ROOT))
-
-from gerrychain import (  # noqa: E402
+from gerrychain import (
     Graph, GeographicPartition, Election, updaters,
 )
-from gerrychain.updaters import cut_edges  # noqa: E402
+from gerrychain.updaters import cut_edges
 
-from texas_gerrymandering_hb4.config import (  # noqa: E402
+from texas_gerrymandering_hb4.config import (
     TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT,
     INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS,
     STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS,
     MEAN_PREC_VOTE_COUNTS_INPUT, PRECINCT_DATASET_PARQUET,
 )
-from run_functions import (  # noqa: E402
-    compute_final_dist, cand_pref_all_draws_outcomes,
-    precompute_state_weights, compute_district_weights,
+
+# run_functions.py lives in pipelines/ensemble_generation_layer alongside its
+# script-style siblings (no __init__.py, not a package), so load it directly
+# from its absolute file path rather than relying on sys.path manipulation.
+_RUN_FUNCTIONS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "ensemble_generation_layer"
+    / "run_functions.py"
 )
+_spec = importlib.util.spec_from_file_location("run_functions", _RUN_FUNCTIONS_PATH)
+_run_functions = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_run_functions)
+compute_final_dist = _run_functions.compute_final_dist
+cand_pref_all_draws_outcomes = _run_functions.cand_pref_all_draws_outcomes
+precompute_state_weights = _run_functions.precompute_state_weights
+compute_district_weights = _run_functions.compute_district_weights
 
 NUM_DISTRICTS = 38
 TOT_POP, CVAP, WCVAP, HCVAP, BCVAP = "TOTALPOP", "CVAP", "WCVAP", "HCVAP", "BCVAP"
