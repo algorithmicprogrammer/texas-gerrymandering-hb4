@@ -96,7 +96,15 @@ def load_pipeline_state():
     Returns a namespace-like dict of every object compute_final_dist needs.
     """
     elec_data = pd.read_csv(TX_ELECTIONS)
-    dropped_elecs = pd.read_csv(DROPPED_ELECS)["Dropped Elections"]
+    # The dropped-elections file is essentially a single-column list. Different
+    # versions of this project header it differently ("Dropped Elections" vs
+    # "Election Set") and it may be empty (no elections dropped), so just read
+    # the first column regardless of label.
+    _dropped_df = pd.read_csv(DROPPED_ELECS)
+    dropped_elecs = (
+        _dropped_df.iloc[:, 0] if not _dropped_df.empty
+        else pd.Series([], dtype=str)
+    )
     recency_weights = pd.read_csv(RECENCY_WEIGHTS)
     min_cand_weights = pd.read_csv(INGROUP_WEIGHT_CSV_FILE)
     cand_race_table = pd.read_csv(CANDIDATE_RACE_PARTY)
@@ -105,23 +113,82 @@ def load_pipeline_state():
 
     state_gdf = gpd.read_parquet(PRECINCT_DATASET_PARQUET)
     state_gdf["CD"] = state_gdf["CD"].astype("int")
+    # The pipeline indexes districts as range(NUM_DISTRICTS) = 0..NUM_DISTRICTS-1
+    # throughout (DataFrame columns in precompute_state_weights, iteration in
+    # compute_W2, dist_changes in collect_raw_probs, etc.). The parquet uses the
+    # natural 1..NUM_DISTRICTS Texas-CD numbering, so shift it down by one so
+    # partition.parts keys match the rest of the code's assumptions.
+    cd_min, cd_max = state_gdf["CD"].min(), state_gdf["CD"].max()
+    if (cd_min, cd_max) == (1, NUM_DISTRICTS):
+        state_gdf["CD"] = state_gdf["CD"] - 1
+    elif (cd_min, cd_max) != (0, NUM_DISTRICTS - 1):
+        raise ValueError(
+            f"Parquet CD column has range [{cd_min}, {cd_max}] with "
+            f"{state_gdf['CD'].nunique()} unique values; expected either 0..{NUM_DISTRICTS - 1} "
+            f"(internal) or 1..{NUM_DISTRICTS} (Texas convention)."
+        )
 
-    # Same TX_columns hardcoded list used in besag_clifford_vra_opportunity.py.
-    TX_columns = [
-        "TrumpR_24G", "HarrisD_24G", "CruzR_24G", "AllredD_24G",
-        "CraddickR_24G", "CulbertD_24G",
-        "BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
-        "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P", "DeSantisR_24P",
-        "UncommittedR_24P",
-        "BidenD_24P", "CornejoD_24P", "LockeD_24P", "LozadaD_24P",
-        "PerezD_24P", "PhillipsD_24P", "UygurD_24P", "WilliamsonD_24P",
-        "CruzR_24P", "GibsonR_24P", "LopezR_24P",
-        "AllredD_24P", "GomezD_24P", "GonzalezD_24P", "GutierrezD_24P",
-        "HassanD_24P", "KeoughD_24P", "PrillimanD_24P", "ShermanD_24P",
-        "TchenkoD_24P",
-        "ClarkR_24P", "CraddickR_24P", "HowellR_24P", "MatlockR_24P", "ReyesR_24P",
-        "BurchD_24P", "CulbertD_24P",
+    # Source of truth for the candidate universe is CANDIDATE_RACE_PARTY. Its
+    # "Candidates" column has full keys like "HarrisD_24G_President" or
+    # "CruzR_24P_US_Sen", from which we recover both the short Name+Party_Stage
+    # form used by the parquet / EI table / gerrychain Elections, and the
+    # office (needed to map candidates to elections in the new TX_elections
+    # naming scheme).
+    #
+    # Office tokens in primary-election names are abbreviated relative to the
+    # office strings in CANDIDATE_RACE_PARTY (e.g. "President" -> "Pres",
+    # "US_Sen" -> "Sen", "RR_Comm_1" -> "RRC"). Extend this map if new offices
+    # are added.
+    _OFFICE_FULL_TO_PRIMARY_ABBR = {
+        "President": "Pres",
+        "US_Sen": "Sen",
+        "RR_Comm_1": "RRC",
+    }
+
+    cand_short_to_office = {}
+    cand_race_dict = {}
+    for full_key, race in cand_race_table.set_index("Candidates")["Race"].items():
+        parts = full_key.split("_")
+        if len(parts) < 3:
+            raise ValueError(
+                f"CANDIDATE_RACE_PARTY entry {full_key!r} is missing the office "
+                f"suffix; expected Name+Party_Stage_Office (e.g. "
+                f"'HarrisD_24G_President')."
+            )
+        short = "_".join(parts[:2])
+        office_full = "_".join(parts[2:])
+        cand_short_to_office[short] = office_full
+        cand_race_dict[short] = race
+
+    # TX_columns is the candidate-universe list previously hardcoded; derive it
+    # so it always tracks CANDIDATE_RACE_PARTY.
+    TX_columns = sorted(cand_short_to_office.keys())
+
+    # Cross-validate against the parquet. Both directions matter:
+    #   - parquet missing a TX_column => the gerrychain Election would crash on
+    #     a missing column when computing tallies.
+    #   - parquet has an extra candidate column without a CANDIDATE_RACE_PARTY
+    #     entry => Election.percents() returns wrong fractions because the
+    #     denominator is the sum of *known* candidates only, not total votes.
+    parquet_cand_cols = [
+        c for c in state_gdf.columns
+        if (("_24G" in c or "_24P" in c) and not c.startswith("TOTVOTE_"))
     ]
+    missing_in_parquet = sorted(set(TX_columns) - set(parquet_cand_cols))
+    if missing_in_parquet:
+        raise ValueError(
+            f"CANDIDATE_RACE_PARTY references candidates not in the parquet "
+            f"({PRECINCT_DATASET_PARQUET}): {missing_in_parquet}"
+        )
+    extra_in_parquet = sorted(set(parquet_cand_cols) - set(TX_columns))
+    if extra_in_parquet:
+        raise ValueError(
+            f"Parquet has candidate columns with no CANDIDATE_RACE_PARTY row: "
+            f"{extra_in_parquet}. Add full-key rows like "
+            f"'{extra_in_parquet[0]}_<Office>,<Race>,<Party>' to "
+            f"{CANDIDATE_RACE_PARTY}; otherwise gerrychain Election.percents() "
+            f"will be wrong (denominators won't include those votes)."
+        )
 
     graph = Graph.from_geodataframe(state_gdf)
     graph.add_data(state_gdf)
@@ -144,16 +211,39 @@ def load_pipeline_state():
         elec_set_dict[elec_set] = dict(zip(sub.Type, sub.Election))
     elec_match_dict = dict(zip(elec_data_trunc["Election"], elec_data_trunc["Election Set"]))
 
-    candidates = {}
-    for elec in elections:
-        cands = ([y for y in TX_columns if elec in y and "R_" not in y.split("1")[0]]
-                 if "R_" in elec[:4] or "P_" in elec[:4]
-                 else [y for y in TX_columns if elec in y])
-        if elec in general_elecs:
-            cands = cands[:2]
-        candidates[elec] = dict(zip(range(len(cands)), cands))
+    # Build candidates[elec] -> {idx: column_name} using the office info
+    # recovered from CANDIDATE_RACE_PARTY. Generals key as "<Stage>_<OfficeFull>"
+    # (e.g. "24G_President"); primaries key as "<Stage>_<OfficeAbbr><Party>"
+    # (e.g. "24P_PresD", "24P_SenR"). The old substring-based builder is
+    # incompatible with this naming scheme.
+    candidates = {elec: {} for elec in elections}
+    for short, office_full in cand_short_to_office.items():
+        stage, party = short.split("_")[1], short[short.index("_") - 1]
+        if stage == "24G":
+            elec_name = f"24G_{office_full}"
+        else:
+            abbr = _OFFICE_FULL_TO_PRIMARY_ABBR.get(office_full)
+            if abbr is None:
+                raise ValueError(
+                    f"No primary-election office abbreviation defined for "
+                    f"office {office_full!r} (candidate {short!r}); add it to "
+                    f"_OFFICE_FULL_TO_PRIMARY_ABBR."
+                )
+            elec_name = f"{stage}_{abbr}{party}"
+        if elec_name not in candidates:
+            # Candidate is for an election that's not in TX_elections (e.g.
+            # dropped or stage we don't model). Silently skip.
+            continue
+        candidates[elec_name][len(candidates[elec_name])] = short
 
-    cand_race_dict = cand_race_table.set_index("Candidates").to_dict()["Race"]
+    # Sanity-check generals — should be exactly 2 candidates each.
+    for ge in general_elecs:
+        if len(candidates[ge]) != 2:
+            print(
+                f"WARNING: general election {ge!r} has "
+                f"{len(candidates[ge])} candidates (expected 2): "
+                f"{list(candidates[ge].values())}"
+            )
     min_cand_weights_dict = {k: min_cand_weights.to_dict()[k][0]
                               for k in min_cand_weights.to_dict().keys()}
 
@@ -178,13 +268,39 @@ def load_pipeline_state():
              if col[:5] in demogs and "abstain" not in col
              and not any(x in col for x in general_elecs)}
     base_dict = {b: (b.split(".")[0].split("_")[0],
-                     "_".join(b.split(".")[1].split("_")[1:-1]))
+                     "_".join(b.split(".")[1].split("_")[:-2]))
                  for b in bases}
     outcomes = {val: [] for val in base_dict.values()}
     for b in bases:
         outcomes[base_dict[b]].append(b)
 
     precs = list(state_gdf[GEO_ID])
+
+    # The parquet may include precincts that aren't covered by the precinct EI
+    # CSV (typical for small/low-minority counties where the EI model wasn't
+    # run). compute_district_weights builds dist_prec_indices from
+    # state_gdf.index (positional, 0..len(state_gdf)-1) and uses them to slice
+    # prec_draws_outcomes along axis 0, so the EI table must be reindexed to
+    # match state_gdf's row order. Missing precincts get zero-filled across all
+    # quantile columns, which means they contribute zero minority-vote support
+    # to any district aggregation -- effectively excluding them, which is what
+    # we want when EI isn't available.
+    _ei_n_before = len(prec_ei_df)
+    prec_ei_df = (
+        prec_ei_df
+        .set_index("CNTYVTD")
+        .reindex(precs)
+        .reset_index()
+        .fillna(0.0)
+    )
+    _missing = len(prec_ei_df) - _ei_n_before
+    if _missing > 0:
+        print(
+            f"NOTE: {_missing} of {len(prec_ei_df)} parquet precincts have no "
+            f"row in the precinct EI CSV; they'll contribute zero minority-vote "
+            f"support to district aggregation."
+        )
+
     prec_draws_outcomes = cand_pref_all_draws_outcomes(prec_ei_df, precs, bases, outcomes)
 
     return dict(
