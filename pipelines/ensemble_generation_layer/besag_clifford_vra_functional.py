@@ -60,7 +60,10 @@ import multiprocessing as mp
 
 from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT
 
-from gerrychain.random import random as gc_random
+# NOTE: gerrychain.random was deprecated. Per gerrychain release notes, the
+# library now hooks directly into Python's stdlib `random` module, so seeding
+# the stdlib `random` (already imported above as stdlib_random) controls all
+# gerrychain randomness. No separate gc_random import is needed.
 from gerrychain import (
     Graph, MarkovChain, GeographicPartition,
     accept, constraints, updaters, Election
@@ -488,7 +491,7 @@ def _build_proposal_and_constraint(initial_partition):
 
 def _run_chain_get_endpoint(start_assignment, n_steps, seed):
     """Run ReCom for n_steps. Returns plain-dict assignment of final state."""
-    gc_random.seed(seed)
+    stdlib_random.seed(seed)
     my_updaters = _build_updaters()
     init_part   = GeographicPartition(graph=graph,
                                       assignment=start_assignment,
@@ -564,7 +567,7 @@ def run_hub_chain(enacted_partition):
     print(f"\n=== Running hub chain ({L_HUB} steps) ===")
     t0       = time.time()
     hub_seed = stdlib_random.randint(0, 10**9)
-    gc_random.seed(hub_seed)
+    stdlib_random.seed(hub_seed)
 
     proposal, pop_constraint = _build_proposal_and_constraint(enacted_partition)
     chain = MarkovChain(
@@ -948,7 +951,7 @@ def save_latex_table(results, run_name):
 def main():
     total_start = time.time()
     master_seed = stdlib_random.randint(0, 10**9)
-    gc_random.seed(master_seed)
+    stdlib_random.seed(master_seed)
     print(f"Master seed: {master_seed}")
 
     # 1. Score enacted map
