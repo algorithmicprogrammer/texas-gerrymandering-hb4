@@ -101,16 +101,16 @@ POP_TOL         = 0.01
 PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
 
-TOT_POP         = 'TOTPOP_x'
-WHITE_POP       = 'NH_WHITE'
-CVAP            = "1_2018"
-WCVAP           = "7_2018"
-HCVAP           = "13_2018"
-BCVAP           = "5_2018"
+# Column names match the schema produced by pipelines/data_engineering_layer
+# (see schema.py: SCHEMA list).
+TOT_POP         = 'TOTALPOP'
+CVAP            = 'CVAP'
+WCVAP           = 'WCVAP'
+HCVAP           = 'HCVAP'
+BCVAP           = 'BCVAP'
 GEO_ID          = 'CNTYVTD'
-COUNTY_SPLIT_ID = "CNTY_x"
-C_X             = "C_X"
-C_Y             = "C_Y"
+C_X             = 'C_X'
+C_Y             = 'C_Y'
 
 if not os.path.exists(DIR + 'outputs'):
     os.mkdir(DIR + 'outputs')
@@ -122,7 +122,6 @@ if not os.path.exists(DIR + 'outputs'):
 print("Loading data...")
 
 elec_data        = pd.read_csv(TX_ELECTIONS)
-TX_columns       = list(pd.read_csv("TX_columns.csv")["Columns"])
 dropped_elecs    = pd.read_csv(DROPPED_ELECS)["Dropped Elections"]
 recency_weights  = pd.read_csv(RECENCY_WEIGHTS)
 min_cand_weights = pd.read_csv(INGROUP_WEIGHT_CSV_FILE)
@@ -132,16 +131,37 @@ prec_ei_df       = pd.read_csv(PREC_COUNT_QUANTS_INPUT,     dtype={'CNTYVTD': 's
 mean_prec_counts = pd.read_csv(MEAN_PREC_VOTE_COUNTS_INPUT, dtype={'CNTYVTD': 'str'})
 logit_params     = pd.read_csv('TX_logit_params.csv')
 
-# ---- shapefile ----
-state_gdf = gpd.read_file(PLOT_PATH)
-state_gdf["CD"]        = state_gdf["CD"].astype('int')
-state_gdf["Seed_Demo"] = state_gdf["Seed_Demo"].astype('int')
-state_gdf.columns      = state_gdf.columns.str.replace("-", "_")
-state_gdf_cols         = list(state_gdf.columns)
-cand1_index = state_gdf_cols.index('RomneyR_12')
-cand2_index = state_gdf_cols.index('ObamaD_12P')
-state_gdf_cols[cand1_index:cand2_index + 1] = TX_columns
-state_gdf.columns = state_gdf_cols
+# ---- precinct dataset ----
+# tx_precincts_final.parquet is produced by pipelines/data_engineering_layer.
+# Columns are canonical (see schema.py); no renaming is needed here.
+state_gdf = gpd.read_parquet(PLOT_PATH)
+state_gdf["CD"] = state_gdf["CD"].astype('int')
+
+# Candidate vote columns present in the parquet (per schema.SCHEMA). These
+# replace the historical TX_columns.csv list and feed the per-election
+# candidate filter below.
+TX_columns = [
+    # 2024 General
+    "TrumpR_24G", "HarrisD_24G",
+    "CruzR_24G",  "AllredD_24G",
+    "CraddickR_24G", "CulbertD_24G",
+    # 2024 Republican Presidential Primary
+    "BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
+    "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P", "DeSantisR_24P",
+    "UncommittedR_24P",
+    # 2024 Democratic Presidential Primary
+    "BidenD_24P", "CornejoD_24P", "LockeD_24P", "LozadaD_24P",
+    "PerezD_24P", "PhillipsD_24P", "UygurD_24P", "WilliamsonD_24P",
+    # 2024 Senate Primary
+    "CruzR_24P", "GibsonR_24P", "LopezR_24P",
+    "AllredD_24P", "GomezD_24P", "GonzalezD_24P", "GutierrezD_24P",
+    "HassanD_24P", "KeoughD_24P", "PrillimanD_24P", "ShermanD_24P",
+    "TchenkoD_24P",
+    # 2024 Railroad Commissioner Primary
+    "ClarkR_24P", "CraddickR_24P", "HowellR_24P", "MatlockR_24P", "ReyesR_24P",
+    "BurchD_24P", "CulbertD_24P",
+]
+
 state_df = pd.DataFrame(state_gdf).drop(['geometry'], axis=1)
 
 # ---- graph ----
@@ -486,12 +506,12 @@ def _build_updaters():
         "final_elec_model": final_elec_model,
     }
     benchmark = [
-        Election("PRES24",  {"Democratic": 'HarrisD_24G_President',
-                              "Republican": 'TrumpR_24G_President'},     alias="PRES24"),
-        Election("SEN24",   {"Democratic": 'AllredD_24G_US_Sen',
-                              "Republican": 'CruzR_24G_US_Sen'},          alias="SEN24"),
-        Election("RRC24_1", {"Democratic": 'CulbertD_24G_RR_Comm_1',
-                              "Republican": 'CraddickR_24G_RR_Comm_1'},   alias="RRC24_1"),
+        Election("PRES24",  {"Democratic": 'HarrisD_24G',
+                              "Republican": 'TrumpR_24G'},      alias="PRES24"),
+        Election("SEN24",   {"Democratic": 'AllredD_24G',
+                              "Republican": 'CruzR_24G'},       alias="SEN24"),
+        Election("RRC24_1", {"Democratic": 'CulbertD_24G',
+                              "Republican": 'CraddickR_24G'},   alias="RRC24_1"),
     ]
     my_updaters.update({e.name: e for e in benchmark})
     my_updaters.update({e.name: e for e in [Election(j, candidates[j]) for j in elections]})
