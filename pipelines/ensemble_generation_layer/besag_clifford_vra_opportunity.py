@@ -486,14 +486,12 @@ def _build_updaters():
         "final_elec_model": final_elec_model,
     }
     benchmark = [
-        Election("PRES16", {"Democratic": 'ClintonD_16G_President',
-                             "Republican": 'TrumpR_16G_President'}, alias="PRES16"),
-        Election("PRES12", {"Democratic": 'ObamaD_12G_President',
-                             "Republican": 'RomneyR_12G_President'}, alias="PRES12"),
-        Election("SEN18",  {"Democratic": "ORourkeD_18G_US_Sen",
-                             "Republican": 'CruzR_18G_US_Sen'},       alias="SEN18"),
-        Election("GOV18",  {"Democratic": "ValdezD_18G_Governor",
-                             "Republican": 'AbbottR_18G_Governor'},    alias="GOV18"),
+        Election("PRES24",  {"Democratic": 'HarrisD_24G_President',
+                              "Republican": 'TrumpR_24G_President'},     alias="PRES24"),
+        Election("SEN24",   {"Democratic": 'AllredD_24G_US_Sen',
+                              "Republican": 'CruzR_24G_US_Sen'},          alias="SEN24"),
+        Election("RRC24_1", {"Democratic": 'CulbertD_24G_RR_Comm_1',
+                              "Republican": 'CraddickR_24G_RR_Comm_1'},   alias="RRC24_1"),
     ]
     my_updaters.update({e.name: e for e in benchmark})
     my_updaters.update({e.name: e for e in [Election(j, candidates[j]) for j in elections]})
