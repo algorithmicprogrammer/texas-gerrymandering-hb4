@@ -241,14 +241,17 @@ Files written to {OUT_DIR}/:
   ingroup_weight.csv                 W2 weights
 
 Next steps:
-  1. Copy these files (and your existing TX_logit_params.csv) into your
+  1. Generate TX_logit_params.csv (if needed):
+       - identity fallback: python generate_tx_logit_params.py --identity --output recom_inputs/TX_logit_params.csv
+       - fitted params:     python generate_tx_logit_params.py --input <calibration_data.csv> --output recom_inputs/TX_logit_params.csv
+  2. Copy these files (including TX_logit_params.csv) into your
      TX_elections_model.py working directory.
-  2. Update TX_elections_model.py:
+  3. Update TX_elections_model.py:
        - EI_statewide = pd.read_csv("recom_inputs/statewide_rxc_EI_preferences.csv")
        - prec_ei_df   = pd.read_csv("recom_inputs/prec_count_quants.csv", dtype={{'CNTYVTD':'str'}})
        - mean_prec_counts = pd.read_csv("recom_inputs/mean_prec_vote_counts.csv", dtype={{'CNTYVTD':'str'}})
        - min_cand_weights = pd.read_csv("recom_inputs/ingroup_weight.csv")
-  3. Update elections_track in TX_elections_model.py to reference your 2024
+  4. Update elections_track in TX_elections_model.py to reference your 2024
      election column names (24G_President, 24G_US_Sen, etc.).
-  4. Run: python TX_elections_model.py
+  5. Run: python TX_elections_model.py
 """)
