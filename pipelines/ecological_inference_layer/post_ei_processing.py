@@ -14,7 +14,7 @@ Inputs  (paths from texas_gerrymandering_hb4.config):
 
 Outputs (written to recom_inputs/):
     statewide_rxc_EI_preferences.csv   — renamed/remapped columns
-    prec_count_quants_colab.csv        — pivoted to wide composite-column format
+    prec_count_quants.csv        — pivoted to wide composite-column format
     mean_prec_vote_counts.csv          — pivoted to wide composite-column format
     ingroup_weight.csv                 — derived W2 weights
 
@@ -104,13 +104,13 @@ print(f"  Written: {len(sw_out)} rows")
 
 
 # ---------------------------------------------------------------------------
-# 2. prec_count_quants_colab.csv  (long -> wide)
+# 2. prec_count_quants.csv  (long -> wide)
 # ---------------------------------------------------------------------------
 # run_functions.py column naming pattern:
 #   {CVAP_KEY}.{election}_{candidate}.{permille}
 # e.g.  BCVAP.24P_SenD_AllredD.125
 
-print("Pivoting prec_count_quants_colab.csv ...")
+print("Pivoting prec_count_quants.csv ...")
 
 qdf = pd.read_csv(PREC_COUNT_QUANTS_CSV, dtype={"CNTYVTD": str})
 
@@ -178,7 +178,7 @@ if filled_zero_floors:
 
 wide_q = wide_q.sort_index(axis=1)   # sort columns alphabetically for readability
 
-wide_q.to_csv(os.path.join(OUT_DIR, "prec_count_quants_colab.csv"), index=False)
+wide_q.to_csv(os.path.join(OUT_DIR, "prec_count_quants.csv"), index=False)
 print(f"  Written: {len(wide_q)} rows x {len(wide_q.columns)} columns")
 
 
@@ -236,7 +236,7 @@ print(f"""
 === Done ===
 Files written to {OUT_DIR}/:
   statewide_rxc_EI_preferences.csv   columns: Election, Demog, Candidate, prob
-  prec_count_quants_colab.csv        wide format, {len(wide_q.columns)-1} data columns
+  prec_count_quants.csv        wide format, {len(wide_q.columns)-1} data columns
   mean_prec_vote_counts.csv          wide format, {len(wide_m.columns)-1} data columns
   ingroup_weight.csv                 W2 weights
 
@@ -245,7 +245,7 @@ Next steps:
      TX_elections_model.py working directory.
   2. Update TX_elections_model.py:
        - EI_statewide = pd.read_csv("recom_inputs/statewide_rxc_EI_preferences.csv")
-       - prec_ei_df   = pd.read_csv("recom_inputs/prec_count_quants_colab.csv", dtype={{'CNTYVTD':'str'}})
+       - prec_ei_df   = pd.read_csv("recom_inputs/prec_count_quants.csv", dtype={{'CNTYVTD':'str'}})
        - mean_prec_counts = pd.read_csv("recom_inputs/mean_prec_vote_counts.csv", dtype={{'CNTYVTD':'str'}})
        - min_cand_weights = pd.read_csv("recom_inputs/ingroup_weight.csv")
   3. Update elections_track in TX_elections_model.py to reference your 2024
