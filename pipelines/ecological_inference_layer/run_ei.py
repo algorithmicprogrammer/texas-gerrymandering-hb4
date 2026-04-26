@@ -18,7 +18,7 @@ Inputs (all in same directory as this script):
 Outputs written to ei_outputs/:
   statewide_rxc_EI_preferences.csv   — statewide candidate-of-choice by group
   mean_prec_vote_counts.csv          — precinct-level mean vote count by race
-  prec_count_quants_colab.csv              — precinct-level octile quantiles by race
+  prec_count_quants.csv              — precinct-level octile quantiles by race
   trace_<elec_key>.nc                — per-election ArviZ trace checkpoint
                                        (safe to delete after all CSVs are final)
 
@@ -161,7 +161,7 @@ os.makedirs("ei_outputs", exist_ok=True)
 # -- Resume logic: load any previously saved outputs --------------------------
 STATEWIDE_CSV = "ei_outputs/statewide_rxc_EI_preferences.csv"
 MEAN_CSV      = "ei_outputs/mean_prec_vote_counts.csv"
-QUANT_CSV     = "ei_outputs/prec_count_quants_colab.csv"
+QUANT_CSV     = "ei_outputs/prec_count_quants.csv"
 
 if os.path.exists(STATEWIDE_CSV):
     statewide_df_existing = pd.read_csv(STATEWIDE_CSV)
@@ -411,7 +411,7 @@ print(f"  mean_prec_vote_counts.csv: {len(mean_df)} rows")
 
 quant_df = pd.concat(quant_counts_list, ignore_index=True)
 quant_df.to_csv(QUANT_CSV, index=False)
-print(f"  prec_count_quants_colab.csv: {len(quant_df)} rows")
+print(f"  prec_count_quants.csv: {len(quant_df)} rows")
 
 print("\n=== EI complete ===")
 print("Next: fill in ingroup_weight.csv using statewide_rxc_EI_preferences.csv,")
