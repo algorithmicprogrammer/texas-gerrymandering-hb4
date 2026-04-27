@@ -114,12 +114,22 @@ def precompute_state_weights(num_districts, elec_sets, elec_set_dict, recency_W1
 
 def compute_district_weights(dist_changes, elec_sets, elec_set_dict, state_gdf, partition, prec_draws_outcomes, \
                              geo_id, primary_elecs, runoff_elecs, elec_match_dict, bases, outcomes, \
-                             recency_W1, cand_race_dict, min_cand_weights_dict):
+                             recency_W1, cand_race_dict, min_cand_weights_dict, ei_geo_ids=None):
     """
     Returns election weights for the district score for Black, Latino and Neither
     effectiveness. Election weights differ across districts, as it uses district-specific preferred
     candidates. It also returns dataframes of district-specific
     Latino and Black-preferred candidates in primaries and runoffs.
+
+    ``prec_draws_outcomes`` is positionally indexed by row number in the EI
+    frame (``prec_ei_df``). When that frame covers a *subset* of ``state_gdf``
+    -- which happens whenever EI couldn't be fit for some precincts -- pass
+    the EI geo_id column as ``ei_geo_ids`` so the per-district precinct lists
+    can be remapped from state_gdf positions to EI positions, and precincts
+    absent from EI can be dropped (they contribute zero to the district sum).
+    If ``ei_geo_ids`` is None we fall back to the historical behaviour of
+    using state_gdf positions directly, which is correct only when the two
+    frames have identical row counts and order.
     """
 
     black_pref_cands_prim_dist = pd.DataFrame(columns=dist_changes)
@@ -136,10 +146,22 @@ def compute_district_weights(dist_changes, elec_sets, elec_set_dict, state_gdf, 
     hisp_conf_W3_dist = np.empty((len(elec_sets), 0), float)
     neither_conf_W3_dist = np.empty((len(elec_sets), 0), float)
 
+    # Build geo_id -> EI-frame position lookup once, if EI geo_ids were
+    # supplied. Precincts in state_gdf that aren't in EI (e.g. EI couldn't be
+    # fit there) are simply dropped from each district's precinct list.
+    if ei_geo_ids is not None:
+        geo_id_to_ei_pos = {gid: pos for pos, gid in enumerate(list(ei_geo_ids))}
+    else:
+        geo_id_to_ei_pos = None
+
     for district in dist_changes:
         state_gdf["New Map"] = state_gdf.index.map(dict(partition.assignment))
         dist_prec_list = list(state_gdf[state_gdf["New Map"] == district][geo_id])
-        dist_prec_indices = state_gdf.index[state_gdf[geo_id].isin(dist_prec_list)].tolist()
+        if geo_id_to_ei_pos is not None:
+            dist_prec_indices = [geo_id_to_ei_pos[g] for g in dist_prec_list
+                                 if g in geo_id_to_ei_pos]
+        else:
+            dist_prec_indices = state_gdf.index[state_gdf[geo_id].isin(dist_prec_list)].tolist()
         district_support_all = cand_pref_outcome_sum(prec_draws_outcomes, dist_prec_indices, bases, outcomes)
 
         black_pref_prob_single_dist = []
@@ -212,7 +234,7 @@ def compute_final_dist(map_winners, black_pref_cands_df, black_pref_cands_runoff
                        black_weight_array, hisp_weight_array, dist_elec_results, dist_changes,
                        cand_race_table, num_districts, candidates, \
                        elec_sets, elec_set_dict, mode, partition, logit_params, logit=False,
-                       return_raw=False):
+                       return_raw=False, return_calibrated=False):
     """
     Returns (Latino, Black, Neither, Overlap) effectiveness distribution for each district.
     The four values sum to one. State-specific rules governing what counts as a "win" for
@@ -221,6 +243,17 @@ def compute_final_dist(map_winners, black_pref_cands_df, black_pref_cands_runoff
     If return_raw=True, returns {district: (hisp_vra_prob, black_vra_prob, neither_vra_prob)}
     BEFORE the logit and the venn-diagram overlap step. This is the quantity that the logit
     in TX_logit_params.csv calibrates against, so it is what you want when fitting calibration.
+
+    If return_calibrated=True (and logit=True), returns
+    {district: (hisp_vra_prob, black_vra_prob, neither_vra_prob)} AFTER the logit calibration
+    but BEFORE the venn-diagram overlap step. These are the per-district per-group calibrated
+    effectiveness scores s^L(d), s^B(d), s^N(d) defined in Becker, Duchin, Gold, Hirsch (2021)
+    Section 4.4 -- the inputs to the paper's effective-district counting and aggregate scoring.
+    Use this when computing the opportunity functional O_g(pi) = sum_d s^g(d).
+
+    The default 4-tuple return is a downstream Venn-decomposition that partitions probability
+    mass into mutually exclusive (only-L, only-B, neither, overlap) bins. That decomposition is
+    not part of the paper's methodology; use return_calibrated=True for paper-faithful scoring.
     """
     general_winners = map_winners[map_winners["Election Type"] == 'General'].reset_index(drop=True)
     primary_winners = map_winners[map_winners["Election Type"] == 'Primary'].reset_index(drop=True)
@@ -363,6 +396,13 @@ def compute_final_dist(map_winners, black_pref_cands_df, black_pref_cands_runoff
         hisp_vra_prob = [1 / (1 + np.exp(-(logit_coef_hisp * y + logit_intercept_hisp))) for y in hisp_vra_prob]
         neither_vra_prob = [1 / (1 + np.exp(-(logit_coef_neither * y + logit_intercept_neither))) for y in
                             neither_vra_prob]
+
+    if return_calibrated:
+        # Post-logit, pre-Venn calibrated effectiveness scores -- the paper's s^g(d).
+        # Note: this branch is reached regardless of the logit flag. If logit=False,
+        # the returned values are the uncalibrated raw scores, which is unlikely to
+        # be what the caller wants but is preserved for symmetry with return_raw.
+        return dict(zip(dist_changes, zip(hisp_vra_prob, black_vra_prob, neither_vra_prob)))
 
     min_neither = [0 if (black_vra_prob[i] + hisp_vra_prob[i]) > 1 else 1 - (black_vra_prob[i] + hisp_vra_prob[i]) for i
                    in range(len(dist_changes))]

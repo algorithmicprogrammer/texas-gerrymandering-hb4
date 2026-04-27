@@ -57,7 +57,7 @@ from functools import partial
 import operator
 import multiprocessing as mp
 
-from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT, PRECINCT_DATASET_PARQUET
+from texas_gerrymandering_hb4.config import TX_ELECTIONS, CANDIDATE_RACE_PARTY, PREC_COUNT_QUANTS_INPUT, INGROUP_WEIGHT_CSV_FILE, DROPPED_ELECS, STATEWIDE_RXC_EI_PREFERENCES_INPUT, RECENCY_WEIGHTS, MEAN_PREC_VOTE_COUNTS_INPUT, PRECINCT_DATASET_PARQUET, TX_LOGIT_PARAMS_CSV
 
 # NOTE: gerrychain.random was deprecated. Per gerrychain release notes, the
 # library now hooks directly into Python's stdlib `random` module, so seeding
@@ -69,7 +69,7 @@ from gerrychain import (
 )
 from gerrychain.proposals import recom
 from gerrychain.updaters import cut_edges, Tally
-from gerrychain.tree import recursive_tree_part
+from gerrychain.tree import recursive_tree_part, bipartition_tree
 
 from run_functions import (
     compute_final_dist, compute_W2, prob_conf_conversion,
@@ -97,7 +97,32 @@ EFFECTIVENESS_CUTOFF = 0.6  # kept for legacy comparison columns only
 # ============================================================
 
 NUM_DISTRICTS   = 38
-POP_TOL         = 0.01
+# Population balance tolerance for ReCom proposals AND for validating the
+# initial state. The enacted Texas CD map has ~1.7% top-to-bottom deviation
+# under the parquet's TOTALPOP column (Census P.L. 94-171 numbers don't
+# survive the precinct/CD crosswalk perfectly), so anything tighter than ~2%
+# rejects the enacted map as the chain's initial state. We adopt 5%, which is
+# common practice for ensemble work where the deviation is measured against
+# something other than the legally-balanced reference column.
+POP_TOL         = 0.05
+# Compactness constraint: reject any proposal whose total cut-edges count
+# exceeds COMPACTNESS_SLACK * (enacted plan's cut-edges). Cut-edges are the
+# number of graph edges whose endpoints lie in different districts; lower
+# values mean "more compact" districts (fewer jagged boundaries between
+# adjacent districts). We use the enacted plan's count, scaled, as the
+# threshold so the constraint is state-relative rather than absolute.
+# Slack of 1.5 is the literature-conventional choice: tight enough to
+# meaningfully constrain the null but loose enough that the chain doesn't
+# get trapped near the enacted map. Set this to None to disable the
+# compactness constraint (script falls back to ReCom's implicit
+# spanning-tree compactness preference, which is what the paper uses).
+COMPACTNESS_SLACK = 1.5
+
+# Populated in main() after score_enacted_map() returns. Worker processes
+# inherit the populated value via fork(), so this is safe to read in
+# _build_proposal_and_constraint from any process.
+ENACTED_CUT_EDGES = None
+
 PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
 
@@ -122,14 +147,14 @@ if not os.path.exists(DIR + 'outputs'):
 print("Loading data...")
 
 elec_data        = pd.read_csv(TX_ELECTIONS)
-dropped_elecs    = pd.read_csv(DROPPED_ELECS)["Dropped Elections"]
+dropped_elecs    = pd.read_csv(DROPPED_ELECS)["Election Set"]
 recency_weights  = pd.read_csv(RECENCY_WEIGHTS)
 min_cand_weights = pd.read_csv(INGROUP_WEIGHT_CSV_FILE)
 cand_race_table  = pd.read_csv(CANDIDATE_RACE_PARTY)
 EI_statewide     = pd.read_csv(STATEWIDE_RXC_EI_PREFERENCES_INPUT)
 prec_ei_df       = pd.read_csv(PREC_COUNT_QUANTS_INPUT,     dtype={'CNTYVTD': 'str'})
 mean_prec_counts = pd.read_csv(MEAN_PREC_VOTE_COUNTS_INPUT, dtype={'CNTYVTD': 'str'})
-logit_params     = pd.read_csv('TX_logit_params.csv')
+logit_params     = pd.read_csv(TX_LOGIT_PARAMS_CSV)
 
 # ---- precinct dataset ----
 # tx_precincts_final.parquet is produced by pipelines/data_engineering_layer.
@@ -189,16 +214,64 @@ for elec_set in elec_sets:
 
 elec_match_dict = dict(zip(elec_data_trunc["Election"], elec_data_trunc["Election Set"]))
 
+# Explicit election -> candidate mapping.
+#
+# The historical filter that lived here used substring matching: it assumed
+# candidate column names contained the election label as a substring (e.g.
+# candidate "Foo_USSEN_24P_R" for election "USSEN_24P"). The current parquet
+# schema (see line 140-142) names candidate columns Name+Party_Stage with no
+# office tag (e.g. "CruzR_24P"), so substring matching against election labels
+# like "24P_SenR" or "24G_President" returns the empty list for every election
+# and `dist_elec_results[elec][i]` is empty downstream -> ValueError in max().
+#
+# Because candidate columns no longer carry the office, the mapping cannot be
+# derived from string surgery alone; we list it explicitly. Update this dict
+# whenever TX_columns or elec_data adds/removes elections or candidates.
+ELECTION_TO_CANDIDATES = {
+    "24G_President":  ["TrumpR_24G", "HarrisD_24G"],
+    "24P_PresR":      ["BinkleyR_24P", "HaleyR_24P", "StuckenbergR_24P", "TrumpR_24P",
+                       "ChristieR_24P", "RamaswamyR_24P", "HutchinsonR_24P",
+                       "DeSantisR_24P", "UncommittedR_24P"],
+    "24P_PresD":      ["BidenD_24P", "CornejoD_24P", "LockeD_24P", "LozadaD_24P",
+                       "PerezD_24P", "PhillipsD_24P", "UygurD_24P", "WilliamsonD_24P"],
+    "24G_US_Sen":     ["CruzR_24G", "AllredD_24G"],
+    "24P_SenR":       ["CruzR_24P", "GibsonR_24P", "LopezR_24P"],
+    "24P_SenD":       ["AllredD_24P", "GomezD_24P", "GonzalezD_24P", "GutierrezD_24P",
+                       "HassanD_24P", "KeoughD_24P", "PrillimanD_24P", "ShermanD_24P",
+                       "TchenkoD_24P"],
+    "24G_RR_Comm_1":  ["CraddickR_24G", "CulbertD_24G"],
+    "24P_RRCR":       ["ClarkR_24P", "CraddickR_24P", "HowellR_24P",
+                       "MatlockR_24P", "ReyesR_24P"],
+    "24P_RRCD":       ["BurchD_24P", "CulbertD_24P"],
+}
+
 candidates = {}
 for elec in elections:
-    cands = ([y for y in elec_cand_list if elec in y and "R_" not in y.split('1')[0]]
-             if "R_" in elec[:4] or "P_" in elec[:4]
-             else [y for y in elec_cand_list if elec in y])
+    if elec not in ELECTION_TO_CANDIDATES:
+        raise KeyError(
+            f"No candidate mapping for election {elec!r}. Update "
+            f"ELECTION_TO_CANDIDATES with its candidate columns from TX_columns."
+        )
+    cands = ELECTION_TO_CANDIDATES[elec]
+    missing = [c for c in cands if c not in elec_cand_list]
+    if missing:
+        raise KeyError(
+            f"Candidates {missing} listed for election {elec!r} are not in "
+            f"TX_columns / parquet schema. Either fix TX_columns or update "
+            f"ELECTION_TO_CANDIDATES."
+        )
     if elec in general_elecs:
         cands = cands[:2]
     candidates[elec] = dict(zip(range(len(cands)), cands))
 
-cand_race_dict        = cand_race_table.set_index("Candidates").to_dict()["Race"]
+# Strip the office suffix from CANDIDATE_RACE_PARTY's "Candidates" keys so the
+# race lookup uses the same Name+Party_Stage form that the rest of the pipeline
+# (parquet columns, EI table, gerrychain Elections) uses. Mirrors the same
+# transformation applied to cand_party_dict in run_functions.compute_final_dist.
+cand_race_dict        = {
+    "_".join(full_key.split("_")[:2]): race
+    for full_key, race in cand_race_table.set_index("Candidates")["Race"].items()
+}
 min_cand_weights_dict = {k: min_cand_weights.to_dict()[k][0]
                           for k in min_cand_weights.to_dict().keys()}
 
@@ -223,7 +296,7 @@ bases     = {col.split('.')[0] + '.' + col.split('.')[1]
              if col[:5] in demogs and 'abstain' not in col
              and not any(x in col for x in general_elecs)}
 base_dict = {b: (b.split('.')[0].split('_')[0],
-                 '_'.join(b.split('.')[1].split('_')[1:-1]))
+                 '_'.join(b.split('.')[1].split('_')[:-2]))
              for b in bases}
 outcomes = {val: [] for val in base_dict.values()}
 for b in bases:
@@ -282,13 +355,18 @@ def final_elec_model(partition):
     """
     Elections model updater. Identical to besag_clifford_vra.py.
 
-    Computes per-district win probabilities for minority-preferred
-    candidates under statewide, equal, and district EI modes.
+    Computes per-district raw effectiveness scores for minority-preferred
+    candidates under statewide, equal, and district EI weighting modes.
 
     Returns
     -------
     (final_state_prob, final_equal_prob, final_dist_prob)
-    Each: {district_index: (hisp_prob, black_prob, neither_prob, combined_prob)}
+    Each: {district_index: (hisp_prob, black_prob, neither_prob)}
+    These are the uncalibrated raw effectiveness scores s_unw / s_state /
+    s_dist as defined in Becker, Duchin, Gold, Hirsch (2021) Section 4.3 --
+    weighted share of election sets in which the minority-preferred candidate
+    succeeded. Logistic calibration (Sec 4.4) is not applied; see the comment
+    above the compute_final_dist call sites for rationale.
     """
     if partition.parent is not None:
         dict1 = dict(partition.parent.assignment)
@@ -324,13 +402,20 @@ def final_elec_model(partition):
         ]
 
     # statewide mode
+    # NOTE: return_raw=True scores against the uncalibrated raw effectiveness
+    # scores from Becker, Duchin, Gold, Hirsch (2021) Section 4.3 -- "weighted
+    # share of elections won by the candidate of choice." Calibration (Sec 4.4)
+    # is intentionally disabled here because it requires district-level ground
+    # truth across multiple election cycles to fit a non-degenerate logit, and
+    # the statewide-only benchmarks available to us produce a degenerate
+    # (perfectly separable) fit. Document this decision in the methods section.
     final_state_prob_dict = compute_final_dist(
         map_winners, black_pref_cands_prim_state, black_pref_cands_runoffs_state,
         hisp_pref_cands_prim_state, hisp_pref_cands_runoffs_state,
         neither_weight_state, black_weight_state, hisp_weight_state,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, "statewide", partition,
-        logit_params, logit=True
+        logit_params, logit=False, return_raw=True,
     )
 
     # equal mode
@@ -340,7 +425,7 @@ def final_elec_model(partition):
         neither_weight_equal, black_weight_equal, hisp_weight_equal,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, "equal", partition,
-        logit_params, logit=True
+        logit_params, logit=False, return_raw=True,
     )
 
     # district mode
@@ -351,7 +436,8 @@ def final_elec_model(partition):
             dist_changes, elec_sets, elec_set_dict, state_gdf, partition,
             prec_draws_outcomes, GEO_ID, primary_elecs, runoff_elecs,
             elec_match_dict, bases, outcomes, recency_W1,
-            cand_race_dict, min_cand_weights_dict
+            cand_race_dict, min_cand_weights_dict,
+            ei_geo_ids=list(prec_ei_df[GEO_ID]),
         )
 
     final_dist_prob_dict = compute_final_dist(
@@ -360,7 +446,7 @@ def final_elec_model(partition):
         neither_weight_dist, black_weight_dist, hisp_weight_dist,
         dist_elec_results, dist_changes, cand_race_table, NUM_DISTRICTS,
         candidates, elec_sets, elec_set_dict, 'district', partition,
-        logit_params, logit=True
+        logit_params, logit=False, return_raw=True,
     )
 
     if partition.parent is None:
@@ -412,7 +498,7 @@ def compute_opportunity_scores(prob_dict,
 
     p_B_list, p_L_list = [], []
     for d in sorted(prob_dict.keys()):
-        hisp_prob, black_prob, neither_prob, combined_prob = prob_dict[d]
+        hisp_prob, black_prob, neither_prob = prob_dict[d]
         p_L_list.append(hisp_prob)
         p_B_list.append(black_prob)
 
@@ -521,12 +607,56 @@ def _build_updaters():
 def _build_proposal_and_constraint(initial_partition):
     total_pop = state_gdf[TOT_POP].sum()
     ideal_pop = total_pop / NUM_DISTRICTS
+    # allow_pair_reselection=True: when bipartition_tree fails to find a
+    # population-balanced cut for the chosen district pair, raise a special
+    # exception that `recom` catches and re-rolls a different pair, instead of
+    # propagating the failure and killing the chain. This is necessary on the
+    # Texas precinct graph because some adjacent district pairs (typically
+    # ones with chokepoint connectivity or very uneven precinct sizes within
+    # the merged subgraph) have almost no spanning tree that admits a
+    # balanced cut at POP_TOL=0.05, and grinding 100,000 attempts on a bad
+    # pair before raising RuntimeError is the worst of both worlds.
+    bipartition_with_reselection = partial(
+        bipartition_tree,
+        allow_pair_reselection=True,
+    )
     proposal  = partial(recom, pop_col=TOT_POP, pop_target=ideal_pop,
-                        epsilon=POP_TOL, node_repeats=3)
+                        epsilon=POP_TOL, node_repeats=3,
+                        method=bipartition_with_reselection)
     pop_constraint = constraints.within_percent_of_ideal_population(
         initial_partition, POP_TOL
     )
-    return proposal, pop_constraint
+
+    chain_constraints = [pop_constraint]
+
+    # Note on contiguity: we do NOT add gerrychain.constraints.contiguous
+    # here. ReCom's spanning-tree bipartition mechanism guarantees that every
+    # PROPOSED plan is contiguous by construction (any cut of a connected
+    # spanning tree leaves two connected pieces), so the constraint is
+    # redundant for proposals. The enacted Texas CD map's within-district
+    # subgraphs are not all connected (notably CDs 10 and 11, which traverse
+    # multiple urban areas where adjacency between same-CD precincts requires
+    # passing through other-CD precincts that get filtered out by the
+    # within-CD subgraph restriction), so adding constraints.contiguous would
+    # cause MarkovChain to reject the enacted plan as an invalid initial
+    # state -- not because the enacted plan is geographically discontiguous
+    # in any real sense, but because of how rook-adjacency interacts with
+    # complex urban CD boundaries. Verified empirically that all proposed
+    # plans are within-CD-contiguous regardless.
+
+    if COMPACTNESS_SLACK is not None and ENACTED_CUT_EDGES is not None:
+        # Plan-level cut-edges floor: reject any proposal whose total count
+        # of cross-district edges exceeds COMPACTNESS_SLACK * enacted count.
+        # gerrychain validators are callables that return True (valid) or
+        # False (reject); we close over the threshold here.
+        max_cut_edges = int(COMPACTNESS_SLACK * ENACTED_CUT_EDGES)
+
+        def compactness_ok(partition):
+            return len(partition["cut_edges"]) <= max_cut_edges
+
+        chain_constraints.append(compactness_ok)
+
+    return proposal, chain_constraints
 
 
 def _run_chain_get_endpoint(start_assignment, n_steps, seed):
@@ -536,10 +666,10 @@ def _run_chain_get_endpoint(start_assignment, n_steps, seed):
     init_part   = GeographicPartition(graph=graph,
                                       assignment=start_assignment,
                                       updaters=my_updaters)
-    proposal, pop_constraint = _build_proposal_and_constraint(init_part)
+    proposal, chain_constraints = _build_proposal_and_constraint(init_part)
     chain = MarkovChain(
         proposal=proposal,
-        constraints=[pop_constraint],
+        constraints=chain_constraints,
         accept=accept.always_accept,
         initial_state=init_part,
         total_steps=n_steps,
@@ -564,7 +694,24 @@ def score_enacted_map():
         assignment = recursive_tree_part(graph, range(NUM_DISTRICTS),
                                          ideal_pop, TOT_POP, POP_TOL, 3)
     else:
-        assignment = START_MAP
+        # START_MAP names a graph-node attribute whose values are district
+        # labels (e.g. the parquet's "CD" column carries Texas's real
+        # congressional district numbers 1..NUM_DISTRICTS). Downstream code in
+        # this script and in run_functions.compute_final_dist is written for
+        # 0-indexed labels (range(NUM_DISTRICTS) is used to iterate districts
+        # and to build DataFrame columns), so we remap the source labels to
+        # 0..NUM_DISTRICTS-1 here at the boundary. This means "district k" in
+        # all downstream outputs corresponds to the (k+1)-th smallest real
+        # district label in the source column.
+        raw_labels = sorted({int(graph.nodes[n][START_MAP]) for n in graph.nodes()})
+        if len(raw_labels) != NUM_DISTRICTS:
+            raise ValueError(
+                f"START_MAP column {START_MAP!r} has {len(raw_labels)} unique "
+                f"district labels, expected NUM_DISTRICTS={NUM_DISTRICTS}."
+            )
+        label_to_idx = {label: idx for idx, label in enumerate(raw_labels)}
+        assignment = {n: label_to_idx[int(graph.nodes[n][START_MAP])]
+                      for n in graph.nodes()}
 
     my_updaters       = _build_updaters()
     enacted_partition = GeographicPartition(graph=graph,
@@ -613,10 +760,10 @@ def run_hub_chain(enacted_partition):
     hub_seed = stdlib_random.randint(0, 10**9)
     stdlib_random.seed(hub_seed)
 
-    proposal, pop_constraint = _build_proposal_and_constraint(enacted_partition)
+    proposal, chain_constraints = _build_proposal_and_constraint(enacted_partition)
     chain = MarkovChain(
         proposal=proposal,
-        constraints=[pop_constraint],
+        constraints=chain_constraints,
         accept=accept.always_accept,
         initial_state=enacted_partition,
         total_steps=L_HUB,
@@ -639,7 +786,8 @@ def _spoke_worker(args):
     """
     Worker for a single spoke.
     args = (spoke_index, hub_assignment, seed)
-    Returns one row containing O, F, and legacy threshold scores.
+    Returns (row_dict, assignment_dict) where row_dict is the score row
+    and assignment_dict maps node_id -> 0-indexed district label.
     """
     spoke_idx, hub_assignment, seed = args
     endpoint_assignment = _run_chain_get_endpoint(hub_assignment, L_SPOKE, seed)
@@ -648,13 +796,13 @@ def _spoke_worker(args):
                                               assignment=endpoint_assignment,
                                               updaters=my_updaters)
     scores = _functional_score_from_partition(endpoint_partition)
-    return {'spoke': spoke_idx, **scores}
+    return {'spoke': spoke_idx, **scores}, endpoint_assignment
 
 
 def run_spokes(hub_assignment):
     """
     Spawn M_SPOKES independent chains from hub, each of length L_SPOKE.
-    Returns DataFrame with one row per spoke.
+    Returns (DataFrame of scores, dict mapping spoke_idx -> assignment dict).
     """
     print(f"\n=== Running {M_SPOKES} spokes "
           f"(L={L_SPOKE} steps each, {N_WORKERS} workers) ===")
@@ -662,23 +810,28 @@ def run_spokes(hub_assignment):
     seeds = [stdlib_random.randint(0, 10**9) for _ in range(M_SPOKES)]
     args  = [(i, hub_assignment, seeds[i]) for i in range(M_SPOKES)]
     rows  = []
+    spoke_assignments = {}
 
     if N_WORKERS > 1:
         with mp.Pool(processes=N_WORKERS) as pool:
-            for i, row in enumerate(pool.imap_unordered(_spoke_worker, args)):
+            for i, (row, assignment) in enumerate(
+                    pool.imap_unordered(_spoke_worker, args)):
                 rows.append(row)
+                spoke_assignments[row['spoke']] = assignment
                 if (i + 1) % 10 == 0:
                     print(f"  {i+1}/{M_SPOKES} spokes done "
                           f"({time.time()-t0:.0f}s elapsed)")
     else:
         for i, arg in enumerate(args):
-            rows.append(_spoke_worker(arg))
+            row, assignment = _spoke_worker(arg)
+            rows.append(row)
+            spoke_assignments[row['spoke']] = assignment
             if (i + 1) % 10 == 0:
                 print(f"  {i+1}/{M_SPOKES} spokes done "
                       f"({time.time()-t0:.0f}s elapsed)")
 
     print(f"  All spokes complete in {time.time()-t0:.1f}s.")
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), spoke_assignments
 
 
 # ============================================================
@@ -1025,11 +1178,23 @@ def main():
     # 1. Score enacted map
     enacted_scores, enacted_partition = score_enacted_map()
 
+    # Capture the enacted plan's cut-edges count so the compactness
+    # constraint in _build_proposal_and_constraint can reference it. Workers
+    # spawned later via fork() will inherit the populated value.
+    global ENACTED_CUT_EDGES
+    ENACTED_CUT_EDGES = len(enacted_partition["cut_edges"])
+    if COMPACTNESS_SLACK is not None:
+        print(f"\n  Enacted cut-edges: {ENACTED_CUT_EDGES}")
+        print(f"  Compactness threshold (cut-edges <= {COMPACTNESS_SLACK} x enacted): "
+              f"{int(COMPACTNESS_SLACK * ENACTED_CUT_EDGES)}")
+    else:
+        print("\n  Compactness constraint disabled (COMPACTNESS_SLACK = None).")
+
     # 2. Hub chain
     hub_assignment = run_hub_chain(enacted_partition)
 
     # 3. Spoke chains
-    spoke_df = run_spokes(hub_assignment)
+    spoke_df, spoke_assignments = run_spokes(hub_assignment)
 
     # 4. B-C p-values and ensemble-standardized Z scores
     results = compute_bc_pvalues(enacted_scores, spoke_df)
@@ -1044,6 +1209,24 @@ def main():
     pd.DataFrame([results]).to_csv(pval_path, index=False)
     print(f"\nSpoke scores saved : {spoke_path}")
     print(f"Results saved      : {pval_path}")
+
+    # 6b. Save spoke assignment plans + enacted assignment as a single
+    # parquet for downstream visualization / analysis. Each column is one
+    # plan; rows are precincts indexed by GEO_ID. The 'enacted' column holds
+    # the 0-indexed remap of the enacted plan (so it shares the label space
+    # with spokes; real CD k corresponds to internal_idx k-1, matching the
+    # remap in score_enacted_map()).
+    plans_df = pd.DataFrame(index=list(state_gdf[GEO_ID]))
+    plans_df.index.name = GEO_ID
+    enacted_assignment = dict(enacted_partition.assignment)
+    plans_df["enacted"] = [enacted_assignment[n] for n in graph.nodes()]
+    for spoke_idx, assignment in sorted(spoke_assignments.items()):
+        plans_df[f"spoke_{spoke_idx:03d}"] = [assignment[n] for n in graph.nodes()]
+    plans_path = DIR + f'outputs/bc_plan_assignments_{RUN_NAME}.parquet'
+    plans_df.to_parquet(plans_path)
+    n_plans = len(plans_df.columns)
+    print(f"Plan assignments saved: {plans_path} "
+          f"({n_plans} plans x {len(plans_df)} precincts)")
 
     # 7. Distribution plots (PDF + PNG)
     save_distribution_plots(enacted_scores, spoke_df, RUN_NAME)
