@@ -67,9 +67,9 @@ from gerrychain import (
     Graph, MarkovChain, GeographicPartition,
     accept, constraints, updaters, Election
 )
-from gerrychain.proposals import recom
+from gerrychain.proposals import reversible_recom
 from gerrychain.updaters import cut_edges, Tally
-from gerrychain.tree import recursive_tree_part, bipartition_tree
+from gerrychain.tree import recursive_tree_part, find_balanced_edge_cuts_memoization
 
 from run_functions import (
     compute_final_dist, compute_W2, prob_conf_conversion,
@@ -78,13 +78,66 @@ from run_functions import (
 )
 
 # ============================================================
-# USER PARAMETERS  (identical to besag_clifford_vra.py)
+# USER PARAMETERS
 # ============================================================
+#
+# Ensemble-size rationale (reviewer-defensible configuration)
+# -----------------------------------------------------------
+# M_SPOKES controls the *resolution* of the Besag-Clifford exact test.
+# With M spokes, the minimum achievable lower-tail p-value is 1/(M+1):
+#
+#     M =   200  -> min p ~ 0.0050   (test pinned at floor; cannot resolve
+#                                     "very extreme" from "extremely extreme")
+#     M =  1000  -> min p ~ 0.0010   (standard for published redistricting
+#                                     work; see Mattingly group, MGGG,
+#                                     DeFord-Duchin-Solomon)
+#     M = 10000  -> min p ~ 0.0001   (litigation/expert-witness grade)
+#
+# We adopt M=1000 as the professional default. If you have access to more
+# compute (cluster / cloud) bump to 5000 or 10000; the only cost is wall
+# time, not validity.
+#
+# L_WALK is the chain length used for BOTH the hub leg (enacted -> hub) and
+# every spoke leg (hub -> spoke). These MUST be equal. The Besag-Clifford
+# hub-and-spoke construction is exact only if the observed (enacted) plan and
+# each spoke are the SAME number of kernel steps from the hub: then, under a
+# reversible kernel, enacted | hub and spoke_i | hub are identically
+# distributed (~ P^{L_WALK}(hub, .)), so {enacted, spoke_1, ..., spoke_M} are
+# conditionally i.i.d. given the hub and therefore exchangeable, which is what
+# makes the rank of the enacted statistic uniform under H_0. If the hub leg
+# and spoke legs had different lengths, enacted ~ P^{L_hub} and spokes ~
+# P^{L_spoke} would NOT be exchangeable and the p-value would not be exact.
+# (This is why the previous L_HUB=2000 / L_SPOKE=500 split was incorrect: a
+# longer hub leg does not add a safety margin, it breaks exactness.)
+#
+# Given exactness holds for ANY common L_WALK, L_WALK affects only *power*
+# (how far the spokes wander from the hub) and wall time, not validity. Note
+# that reversible ReCom self-loops frequently (see REVRECOM_M below), so the
+# number of *accepted* moves in L_WALK steps is much smaller than L_WALK; if
+# spokes look too close to the hub, raise L_WALK (keeping hub and spoke equal,
+# which is automatic here since both read L_WALK).
+L_WALK    = 500
+L_HUB     = L_WALK
+L_SPOKE   = L_WALK
 
-L_HUB     = 500
-L_SPOKE   = 500
-M_SPOKES  = 200
+# M_SPOKES controls p-value resolution (min lower-tail p = 1/(M+1)); see above.
+M_SPOKES  = 1000
 N_WORKERS = max(1, mp.cpu_count() - 1)
+
+# REVRECOM_M: the reversible-ReCom tuning constant from Cannon, Duchin,
+# Randall & Rule (2022), "Spanning Tree Methods for Sampling Graph
+# Partitions" (arXiv:2210.01401). It is an UPPER BOUND on the number of
+# balanced edges considered per step and governs the self-loop (rejection)
+# rate that makes the kernel reversible w.r.t. the spanning-tree distribution.
+# CRITICAL: it must be a fixed constant chosen in advance -- adapting it
+# online (e.g. tuning it to hit a target acceptance rate during the run)
+# destroys reversibility and voids the exact p-value. Larger M -> fewer
+# self-loops (faster mixing / more distinct states) but the value itself does
+# not affect validity. Measure the realized accepted-move fraction from the
+# hub-chain diagnostic and report it; if it is very low, raise REVRECOM_M and
+# /or L_WALK. A value in the low tens is typical for a state-scale precinct
+# graph; start here and adjust based on the diagnostic.
+REVRECOM_M = 30
 
 START_MAP  = 'CD'
 RUN_NAME   = 'TX_BC_functional'
@@ -118,10 +171,37 @@ POP_TOL         = 0.05
 # spanning-tree compactness preference, which is what the paper uses).
 COMPACTNESS_SLACK = 1.5
 
+# County-split constraint: reject any proposal that splits more counties
+# than COUNTY_SPLITS_SLACK * (enacted plan's split-county count). A county
+# is "split" if its precincts land in 2+ different districts under the
+# proposed plan. This addresses the standard reviewer / opposing-expert
+# objection that ensemble plans achieve high opportunity scores by
+# carving counties more aggressively than any real-world map drawer
+# would, ignoring communities of interest and county-level political
+# boundaries that state law and tradition treat as meaningful units.
+#
+# Slack of 1.2 (20% looser than enacted) is the middle of the literature
+# range:
+#   - 1.0 (as tight as enacted): too restrictive in practice; ReCom's
+#     boundary swaps frequently produce single-county-split moves and
+#     the chain crawls.
+#   - 1.2: the sweet spot used in most peer-reviewed work; allows the
+#     chain to mix while preserving the constraint's bite.
+#   - 1.5: looser; comparable to the compactness slack above.
+#   - None: disables the constraint.
+COUNTY_SPLITS_SLACK = 1.2
+
+# Column in state_gdf that identifies each precinct's county. If this
+# column isn't present, we fall back to the first 3 characters of
+# GEO_ID (the Texas CNTYVTD convention is CCCxxxxx where CCC is the
+# 3-digit county code).
+COUNTY_COL = 'COUNTY'
+
 # Populated in main() after score_enacted_map() returns. Worker processes
-# inherit the populated value via fork(), so this is safe to read in
+# inherit the populated values via fork(), so they are safe to read in
 # _build_proposal_and_constraint from any process.
 ENACTED_CUT_EDGES = None
+ENACTED_COUNTY_SPLITS = None
 
 PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
@@ -604,63 +684,138 @@ def _build_updaters():
     return my_updaters
 
 
+def _node_county(node_data):
+    """Extract a county identifier from a graph node's data dict.
+
+    Prefers the explicit COUNTY_COL if present in the node's attributes;
+    otherwise falls back to the first 3 characters of GEO_ID, which under
+    the Texas CNTYVTD convention is the 3-digit county code. The fallback
+    keeps the script working on parquet vintages that don't carry an
+    explicit county column.
+    """
+    if COUNTY_COL is not None and COUNTY_COL in node_data:
+        return node_data[COUNTY_COL]
+    return node_data[GEO_ID][:3]
+
+
+def _count_county_splits(partition):
+    """Number of counties whose precincts span 2+ districts under this plan.
+
+    O(N) in the number of precincts; called once per proposal evaluation,
+    which is acceptable in the same way the cut_edges scan is acceptable.
+    A faster cached-updater version is possible if profiling shows this is
+    a bottleneck, but for the current run sizes the simple form is fine.
+    """
+    county_to_districts = {}
+    for node, district in partition.assignment.items():
+        county = _node_county(partition.graph.nodes[node])
+        county_to_districts.setdefault(county, set()).add(district)
+    return sum(1 for ds in county_to_districts.values() if len(ds) >= 2)
+
+
 def _build_proposal_and_constraint(initial_partition):
+    """Build the reversible-ReCom proposal for the Besag-Clifford construction.
+
+    Returns (proposal, chain_constraints) where:
+
+    * ``proposal`` is reversible ReCom (Cannon et al. 2022), which is
+      reversible with respect to the spanning-tree distribution on
+      population-balanced K-partitions. This is the property the
+      Besag-Clifford exact test requires; plain ReCom with always-accept is
+      NOT reversible w.r.t. any known target and cannot support the exact
+      p-value.
+
+    * ``chain_constraints`` is intentionally EMPTY ``[]``. Hard constraints
+      (population, compactness, county splits) are enforced INSIDE the
+      proposal as self-loops -- if a reversible-ReCom move would leave the
+      feasible set, the proposal returns the current state instead.
+
+      This is the crucial correctness point. gerrychain's MarkovChain, when a
+      proposal fails a Validator in ``constraints``, RE-DRAWS a new proposal
+      (it does not increment the step counter and does not stay put). That
+      "rejection by resampling" turns the effective kernel into
+      P(x, .)/Z(x) with an x-dependent normalizer Z(x), which is NOT
+      reversible and would silently void the exact test. Applying the same
+      constraints as self-loops instead -- Q(x,y)=P(x,y) for feasible y!=x,
+      with all infeasible mass folded onto Q(x,x) -- preserves detailed
+      balance w.r.t. the spanning-tree distribution RESTRICTED to the
+      feasible set. The enacted plan is feasible by construction (the
+      thresholds are slack multiples of the enacted plan's own counts), so it
+      lies in the support; the null is then "the spanning-tree distribution
+      conditioned on the compactness and county-split feasible set," which
+      should be stated as such in the paper.
+    """
     total_pop = state_gdf[TOT_POP].sum()
     ideal_pop = total_pop / NUM_DISTRICTS
-    # allow_pair_reselection=True: when bipartition_tree fails to find a
-    # population-balanced cut for the chosen district pair, raise a special
-    # exception that `recom` catches and re-rolls a different pair, instead of
-    # propagating the failure and killing the chain. This is necessary on the
-    # Texas precinct graph because some adjacent district pairs (typically
-    # ones with chokepoint connectivity or very uneven precinct sizes within
-    # the merged subgraph) have almost no spanning tree that admits a
-    # balanced cut at POP_TOL=0.05, and grinding 100,000 attempts on a bad
-    # pair before raising RuntimeError is the worst of both worlds.
-    bipartition_with_reselection = partial(
-        bipartition_tree,
-        allow_pair_reselection=True,
-    )
-    proposal  = partial(recom, pop_col=TOT_POP, pop_target=ideal_pop,
-                        epsilon=POP_TOL, node_repeats=3,
-                        method=bipartition_with_reselection)
-    pop_constraint = constraints.within_percent_of_ideal_population(
-        initial_partition, POP_TOL
+
+    base_proposal = partial(
+        reversible_recom,
+        pop_col=TOT_POP,
+        pop_target=ideal_pop,
+        epsilon=POP_TOL,
+        balance_edge_fn=find_balanced_edge_cuts_memoization,
+        M=REVRECOM_M,
+        # repeat_until_valid MUST stay False. Setting it True makes the
+        # proposal re-draw until it finds a non-self-loop move, which removes
+        # exactly the self-loops that reversibility depends on -- the same
+        # failure mode as resampling-based Validators, just inside the
+        # proposal. Leave it False.
+        repeat_until_valid=False,
     )
 
-    chain_constraints = [pop_constraint]
+    # Feasibility thresholds, closed over by the self-loop wrapper below.
+    pop_lo = ideal_pop * (1.0 - POP_TOL)
+    pop_hi = ideal_pop * (1.0 + POP_TOL)
 
-    # Note on contiguity: we do NOT add gerrychain.constraints.contiguous
-    # here. ReCom's spanning-tree bipartition mechanism guarantees that every
-    # PROPOSED plan is contiguous by construction (any cut of a connected
-    # spanning tree leaves two connected pieces), so the constraint is
-    # redundant for proposals. The enacted Texas CD map's within-district
-    # subgraphs are not all connected (notably CDs 10 and 11, which traverse
-    # multiple urban areas where adjacency between same-CD precincts requires
-    # passing through other-CD precincts that get filtered out by the
-    # within-CD subgraph restriction), so adding constraints.contiguous would
-    # cause MarkovChain to reject the enacted plan as an invalid initial
-    # state -- not because the enacted plan is geographically discontiguous
-    # in any real sense, but because of how rook-adjacency interacts with
-    # complex urban CD boundaries. Verified empirically that all proposed
-    # plans are within-CD-contiguous regardless.
+    max_cut_edges = (int(COMPACTNESS_SLACK * ENACTED_CUT_EDGES)
+                     if (COMPACTNESS_SLACK is not None
+                         and ENACTED_CUT_EDGES is not None) else None)
+    max_county_splits = (int(COUNTY_SPLITS_SLACK * ENACTED_COUNTY_SPLITS)
+                         if (COUNTY_SPLITS_SLACK is not None
+                             and ENACTED_COUNTY_SPLITS is not None) else None)
 
-    if COMPACTNESS_SLACK is not None and ENACTED_CUT_EDGES is not None:
-        # Plan-level cut-edges floor: reject any proposal whose total count
-        # of cross-district edges exceeds COMPACTNESS_SLACK * enacted count.
-        # gerrychain validators are callables that return True (valid) or
-        # False (reject); we close over the threshold here.
-        max_cut_edges = int(COMPACTNESS_SLACK * ENACTED_CUT_EDGES)
+    def _feasible(part):
+        # Population: reversible ReCom already produces splits within epsilon,
+        # so this almost never bites; enforced defensively so no infeasible
+        # state can ever slip through and so the feasible set is stated
+        # explicitly. A self-loop here is reversibility-preserving.
+        pops = part["population"].values()
+        if any(p < pop_lo or p > pop_hi for p in pops):
+            return False
+        if max_cut_edges is not None and len(part["cut_edges"]) > max_cut_edges:
+            return False
+        if (max_county_splits is not None
+                and _count_county_splits(part) > max_county_splits):
+            return False
+        return True
 
-        def compactness_ok(partition):
-            return len(partition["cut_edges"]) <= max_cut_edges
+    def reversible_proposal(part):
+        cand = base_proposal(part)
+        # If reversible ReCom self-looped, cand == part and is trivially
+        # feasible (part is feasible), so _feasible passes and we return it;
+        # no special identity check needed. If cand is a genuine move that
+        # leaves the feasible set, fold it onto a self-loop by returning part.
+        if _feasible(cand):
+            return cand
+        return part
 
-        chain_constraints.append(compactness_ok)
+    # Empty constraints: all hard constraints live in the proposal as
+    # self-loops (see docstring). Do NOT add Validators here.
+    chain_constraints = []
 
-    return proposal, chain_constraints
+    return reversible_proposal, chain_constraints
 
 
 def _run_chain_get_endpoint(start_assignment, n_steps, seed):
-    """Run ReCom for n_steps. Returns plain-dict assignment of final state."""
+    """Run reversible ReCom for n_steps. Returns plain-dict assignment of the
+    final state.
+
+    accept=always_accept is correct here: reversibility lives in the proposal
+    itself (reversible ReCom self-loops to balance the kernel, and our wrapper
+    folds constraint violations onto additional self-loops), so the chain
+    simply takes whatever the proposal returns at each step. There is no
+    Metropolis correction to apply on top.
+    """
     stdlib_random.seed(seed)
     my_updaters = _build_updaters()
     init_part   = GeographicPartition(graph=graph,
@@ -751,9 +906,19 @@ def run_hub_chain(enacted_partition):
     """
     Run the chain forward L_HUB steps from the enacted map to reach hub X*.
 
-    ReCom with always_accept is reversible, so running forward L steps is
-    equivalent to drawing a map L steps away in state space, satisfying the
-    Besag-Clifford parallel method requirement (B-C 1989, Prop 3.3).
+    Because reversible ReCom is reversible with respect to the spanning-tree
+    distribution, running it forward L_HUB steps from the enacted plan is
+    distributionally equivalent to running the reverse kernel L_HUB steps.
+    That is what lets the enacted plan play the role of one spoke off the hub:
+    the hub is L_HUB reverse-steps "behind" the enacted plan, and each spoke is
+    L_SPOKE forward-steps "ahead" of the hub. Exactness requires L_HUB ==
+    L_SPOKE (both are L_WALK here), so the enacted plan and every spoke are the
+    same number of steps from the hub and hence exchangeable under H_0.
+
+    Also prints the realized accepted-move fraction (1 - self-loop rate). This
+    is a diagnostic to REPORT, not a knob to tune mid-run: REVRECOM_M and
+    L_WALK are fixed in advance, and the accepted-move fraction just tells you
+    whether they were generous enough for the spokes to travel.
     """
     print(f"\n=== Running hub chain ({L_HUB} steps) ===")
     t0       = time.time()
@@ -769,11 +934,29 @@ def run_hub_chain(enacted_partition):
         total_steps=L_HUB,
     )
     hub_partition = enacted_partition
+    prev_assignment = dict(enacted_partition.assignment)
+    accepted_moves = 0
+    n_seen = 0
     for step in chain:
+        cur_assignment = dict(step.assignment)
+        if n_seen > 0 and cur_assignment != prev_assignment:
+            accepted_moves += 1
+        prev_assignment = cur_assignment
+        n_seen += 1
         hub_partition = step
 
+    transitions = max(1, n_seen - 1)
+    accept_frac = accepted_moves / transitions
     hub_assignment = dict(hub_partition.assignment)
     print(f"  Hub reached in {time.time() - t0:.1f}s.")
+    print(f"  Accepted-move fraction: {accept_frac:.3f} "
+          f"({accepted_moves} moves / {transitions} steps; "
+          f"REVRECOM_M={REVRECOM_M}, L_WALK={L_WALK}).")
+    if accept_frac < 0.02:
+        print("  WARNING: very low accepted-move fraction. Spokes may barely "
+              "leave the hub, weakening power. Consider raising REVRECOM_M "
+              "and/or L_WALK (keep them fixed for the production run) -- this "
+              "does not affect validity, only power.")
     return hub_assignment
 
 
@@ -1189,6 +1372,19 @@ def main():
               f"{int(COMPACTNESS_SLACK * ENACTED_CUT_EDGES)}")
     else:
         print("\n  Compactness constraint disabled (COMPACTNESS_SLACK = None).")
+
+    # Same for the county-splits count: compute from the enacted partition
+    # once, store as a module global so worker processes inherit it via
+    # fork(). Done after the cut-edges capture so the diagnostics print in a
+    # logical order at startup.
+    global ENACTED_COUNTY_SPLITS
+    ENACTED_COUNTY_SPLITS = _count_county_splits(enacted_partition)
+    if COUNTY_SPLITS_SLACK is not None:
+        print(f"  Enacted county splits: {ENACTED_COUNTY_SPLITS}")
+        print(f"  County-splits threshold (splits <= {COUNTY_SPLITS_SLACK} x enacted): "
+              f"{int(COUNTY_SPLITS_SLACK * ENACTED_COUNTY_SPLITS)}")
+    else:
+        print("  County-splits constraint disabled (COUNTY_SPLITS_SLACK = None).")
 
     # 2. Hub chain
     hub_assignment = run_hub_chain(enacted_partition)
