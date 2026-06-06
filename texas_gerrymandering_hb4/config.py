@@ -64,6 +64,7 @@ INGROUP_WEIGHT_CSV_FILE = RECOM_INPUTS_DIR / "ingroup_weight.csv"
 MEAN_PREC_VOTE_COUNTS_INPUT = RECOM_INPUTS_DIR / "mean_prec_vote_counts.csv"
 PREC_COUNT_QUANTS_INPUT = RECOM_INPUTS_DIR / "prec_count_quants.csv"
 STATEWIDE_RXC_EI_PREFERENCES_INPUT = RECOM_INPUTS_DIR / "statewide_rxc_EI_preferences.csv"
+TX_LOGIT_PARAMS_CSV = ECOLOGICAL_INFERENCE_LAYER_DIR / "TX_logit_params.csv"
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
