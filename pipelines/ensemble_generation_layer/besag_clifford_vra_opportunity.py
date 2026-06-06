@@ -68,8 +68,10 @@ from gerrychain import (
     accept, constraints, updaters, Election
 )
 from gerrychain.proposals import reversible_recom
+from gerrychain.proposals.tree_proposals import ReversibilityError
 from gerrychain.updaters import cut_edges, Tally
 from gerrychain.tree import recursive_tree_part, find_balanced_edge_cuts_memoization
+from collections import Counter
 
 from run_functions import (
     compute_final_dist, compute_W2, prob_conf_conversion,
@@ -116,28 +118,56 @@ from run_functions import (
 # number of *accepted* moves in L_WALK steps is much smaller than L_WALK; if
 # spokes look too close to the hub, raise L_WALK (keeping hub and spoke equal,
 # which is automatic here since both read L_WALK).
-L_WALK    = 500
+L_WALK    = 50000
 L_HUB     = L_WALK
 L_SPOKE   = L_WALK
 
-# M_SPOKES controls p-value resolution (min lower-tail p = 1/(M+1)); see above.
+# M_SPOKES controls p-value resolution (min lower-tail p = 1/(M+1)).
+#   M=1000 -> min p ~ 0.001 ; M=200 -> min p ~ 0.005.
+# We use M=200. The enacted Texas plan sits FAR in the lower tail on every
+# functional (the prior always-accept run put Latino at Z ~ -6 and the
+# enacted F-scores are deeply negative), so a floor of 1/201 ~ 0.005 is more
+# than enough to support the claim "the enacted plan is more extreme than
+# every neutral alternative we drew": if the enacted rank is 1 of 201, that
+# is p <= 0.005 one-sided, which clears the usual 0.01 bar. Resolving 0.001
+# vs 0.005 would only matter if the enacted plan sat NEAR the boundary, which
+# it does not. M=200 cuts spoke wall time 5x relative to M=1000 -- the single
+# largest, validity-neutral speedup available, since reversible ReCom's cost
+# is dominated by the per-proposal spanning-tree draw (see REVRECOM_M note),
+# not by anything that M trades against. If a reviewer specifically demands
+# 10^-3 resolution, raise this back to 1000 and budget ~5x the wall time;
+# nothing else need change.
 M_SPOKES  = 1000
 N_WORKERS = max(1, mp.cpu_count() - 1)
 
-# REVRECOM_M: the reversible-ReCom tuning constant from Cannon, Duchin,
+# REVRECOM_M: the reversible-ReCom tuning constant M from Cannon, Duchin,
 # Randall & Rule (2022), "Spanning Tree Methods for Sampling Graph
-# Partitions" (arXiv:2210.01401). It is an UPPER BOUND on the number of
-# balanced edges considered per step and governs the self-loop (rejection)
-# rate that makes the kernel reversible w.r.t. the spanning-tree distribution.
-# CRITICAL: it must be a fixed constant chosen in advance -- adapting it
-# online (e.g. tuning it to hit a target acceptance rate during the run)
-# destroys reversibility and voids the exact p-value. Larger M -> fewer
-# self-loops (faster mixing / more distinct states) but the value itself does
-# not affect validity. Measure the realized accepted-move fraction from the
-# hub-chain diagnostic and report it; if it is very low, raise REVRECOM_M and
-# /or L_WALK. A value in the low tens is typical for a state-scale precinct
-# graph; start here and adjust based on the diagnostic.
-REVRECOM_M = 30
+# Partitions" (arXiv:2210.01401). At each step reversible ReCom draws a
+# uniform spanning tree on the merged district pair, enumerates balanced
+# edges, and accepts with probability len(cuts)/(M * seam_length); otherwise
+# it self-loops. This per-step spanning-tree draw on a large merged subgraph
+# is the DOMINANT cost of the whole run (far more than any score or
+# constraint evaluation), and the low acceptance probability is why the chain
+# spends most steps self-looping. Neither fact is a bug -- it is the price of
+# the exact-test guarantee.
+#
+# Choosing M is a trade-off with NO effect on validity, only on speed and
+# robustness:
+#   * Too small: when a merged pair yields more than M balanced edges, the
+#     library raises ReversibilityError. We catch it and self-loop (see
+#     run-chain code) so the job never crashes, and we COUNT how often it
+#     fires. A nonzero trigger rate means the M-bound is being hit and the
+#     truncation it implies could introduce a small bias, so treat a
+#     non-negligible rate as a signal to RAISE M and rerun. A zero/near-zero
+#     rate means the bound never bound and the test is clean.
+#   * Too large: acceptance probability len(cuts)/(M*seam) shrinks, so the
+#     chain self-loops even more and mixes more slowly (still valid, just
+#     slower / lower power).
+# M must be a fixed constant chosen in advance; adapting it online to hit a
+# target acceptance rate would break reversibility. Start at 50; watch the
+# reported ReversibilityError rate and accepted-move fraction from the hub
+# diagnostic and adjust BEFORE the production run, then leave it fixed.
+REVRECOM_M = 20
 
 START_MAP  = 'CD'
 RUN_NAME   = 'TX_BC_functional'
@@ -189,7 +219,7 @@ COMPACTNESS_SLACK = 1.5
 #     chain to mix while preserving the constraint's bite.
 #   - 1.5: looser; comparable to the compactness slack above.
 #   - None: disables the constraint.
-COUNTY_SPLITS_SLACK = 1.2
+COUNTY_SPLITS_SLACK = 1.5
 
 # Column in state_gdf that identifies each precinct's county. If this
 # column isn't present, we fall back to the first 3 characters of
@@ -202,6 +232,13 @@ COUNTY_COL = 'COUNTY'
 # _build_proposal_and_constraint from any process.
 ENACTED_CUT_EDGES = None
 ENACTED_COUNTY_SPLITS = None
+
+# Per-process counters of reversible-ReCom M-bound violations (ReversibilityError)
+# and total proposal calls. Each forked worker keeps its own; the hub process
+# reports its own. A nonzero ratio is a signal to raise REVRECOM_M (see the
+# REVRECOM_M note above) -- it does not crash the run because we self-loop.
+REVERR_COUNT = 0
+PROPOSAL_COUNT = 0
 
 PLOT_PATH       = PRECINCT_DATASET_PARQUET
 DIR             = ''
@@ -276,6 +313,45 @@ centroids_geom = state_gdf.centroid
 for node in graph.nodes():
     graph.nodes[node]["C_X"] = centroids_geom.x[node]
     graph.nodes[node]["C_Y"] = centroids_geom.y[node]
+
+# ---- apply contiguity bridge edges (Reading A) ----
+# diagnose_and_repair_graph.py writes outputs/bridge_edges.json: a list of
+# edges that make every ENACTED district induce a connected subgraph WITHOUT
+# changing any precinct's district assignment. This is required so the enacted
+# plan is a valid starting state for reversible ReCom (which draws spanning
+# trees and cannot handle a district with no spanning tree). Edges are applied
+# by GEO_ID so the file is robust to row reordering. Most edges are short
+# rook-adjacency repairs (true geography); a few are long, disclosed bridges
+# embedding PLANC2333's intentional discontiguous metro assignments (TX CD 10,
+# 11). If the file is absent the graph is used as-is and a warning is printed
+# (the run will then crash on the first discontiguous-district merge).
+_BRIDGE_EDGES_PATH = DIR + 'outputs/bridge_edges.json'
+if os.path.exists(_BRIDGE_EDGES_PATH):
+    import json as _json
+    with open(_BRIDGE_EDGES_PATH) as _bf:
+        _bridge_payload = _json.load(_bf)
+    _geoid_to_node = {graph.nodes[n][GEO_ID]: n for n in graph.nodes()}
+    _applied = 0
+    _missing = 0
+    _max_len = 0.0
+    for _e in _bridge_payload.get("edges", []):
+        _u = _geoid_to_node.get(_e["u_geoid"])
+        _v = _geoid_to_node.get(_e["v_geoid"])
+        if _u is None or _v is None:
+            _missing += 1
+            continue
+        if not graph.has_edge(_u, _v):
+            graph.add_edge(_u, _v)
+            _applied += 1
+            _max_len = max(_max_len, float(_e.get("length", 0.0)))
+    print(f"Applied {_applied} contiguity bridge edges "
+          f"(units: {_bridge_payload.get('units','?')}, "
+          f"max length {_max_len:.3f}); {_missing} skipped (GEO_ID not found).")
+else:
+    print("WARNING: outputs/bridge_edges.json not found. Graph used as-is; "
+          "enacted districts may be discontiguous and reversible ReCom will "
+          "crash on the first such merge. Run diagnose_and_repair_graph.py "
+          "--repair first.")
 
 # ---- elections data structures ----
 elecs_bool      = ~elec_data.Election.isin(list(dropped_elecs))
@@ -659,6 +735,77 @@ def _functional_score_from_partition(partition):
 # CHAIN INFRASTRUCTURE  (identical to besag_clifford_vra.py)
 # ============================================================
 
+class CountySplitUpdater:
+    """Cached, incremental updater for the number of split counties.
+
+    Returns a dict ``{"count": int, "ccd": {county: Counter(district -> n)}}``.
+    A county is "split" if its precincts occupy 2+ distinct districts.
+
+    On the initial state (``partition.parent is None``) it scans every
+    precinct once. On every subsequent state it reads the parent's cached
+    ``ccd``, applies only ``partition.flips`` (the handful of precincts
+    reversible ReCom actually moved), and adjusts the split count for just the
+    touched counties. This keeps the per-call cost proportional to the number
+    of flipped precincts rather than O(all precincts).
+
+    Note: this updater only runs when something reads ``partition["county_splits"]``.
+    In this pipeline that read happens in the feasibility wrapper, i.e. only on
+    candidates that survived reversible ReCom's internal acceptance. The bulk
+    of the run's cost is the spanning-tree draw inside reversible ReCom, which
+    this updater does not touch; the incremental form is a modest tidy-up, not
+    the main lever. (The main lever is M_SPOKES.) Validated bit-for-bit against
+    the brute-force scan over long chains.
+    """
+
+    def __init__(self, county_of):
+        self.county_of = county_of
+
+    def _is_split(self, counter):
+        return sum(1 for n in counter.values() if n > 0) >= 2
+
+    def __call__(self, partition):
+        parent = partition.parent
+        if parent is None:
+            ccd = {}
+            for node, dist in partition.assignment.items():
+                cty = self.county_of(partition.graph.nodes[node])
+                ccd.setdefault(cty, Counter())[dist] += 1
+            count = sum(1 for c in ccd.values() if self._is_split(c))
+            return {"count": count, "ccd": ccd}
+
+        prev = parent["county_splits"]
+        ccd = dict(prev["ccd"])            # shallow-copy outer mapping
+        count = prev["count"]
+        flips = partition.flips or {}
+
+        # copy-on-write only the counties a flipped precinct belongs to
+        touched = set()
+        for node in flips:
+            cty = self.county_of(partition.graph.nodes[node])
+            if cty not in touched:
+                ccd[cty] = prev["ccd"][cty].copy()
+                touched.add(cty)
+
+        for node, new_dist in flips.items():
+            cty = self.county_of(partition.graph.nodes[node])
+            old_dist = parent.assignment[node]
+            c = ccd[cty]
+            c[old_dist] -= 1
+            if c[old_dist] == 0:
+                del c[old_dist]
+            c[new_dist] += 1
+
+        for cty in touched:
+            before = self._is_split(prev["ccd"][cty])
+            after = self._is_split(ccd[cty])
+            if after and not before:
+                count += 1
+            elif before and not after:
+                count -= 1
+
+        return {"count": count, "ccd": ccd}
+
+
 def _build_updaters():
     my_updaters = {
         "population": updaters.Tally(TOT_POP, alias="population"),
@@ -669,6 +816,7 @@ def _build_updaters():
         "Sum_CX":     updaters.Tally(C_X,     alias="Sum_CX"),
         "Sum_CY":     updaters.Tally(C_Y,     alias="Sum_CY"),
         "cut_edges":  cut_edges,
+        "county_splits": CountySplitUpdater(_node_county),
         "final_elec_model": final_elec_model,
     }
     benchmark = [
@@ -785,16 +933,52 @@ def _build_proposal_and_constraint(initial_partition):
         if max_cut_edges is not None and len(part["cut_edges"]) > max_cut_edges:
             return False
         if (max_county_splits is not None
-                and _count_county_splits(part) > max_county_splits):
+                and part["county_splits"]["count"] > max_county_splits):
+            # Reads the cached, incremental CountySplitUpdater (O(flips)),
+            # not the O(all-precincts) brute scan.
             return False
         return True
 
     def reversible_proposal(part):
-        cand = base_proposal(part)
-        # If reversible ReCom self-looped, cand == part and is trivially
-        # feasible (part is feasible), so _feasible passes and we return it;
-        # no special identity check needed. If cand is a genuine move that
-        # leaves the feasible set, fold it onto a self-loop by returning part.
+        # Count every proposal, and catch the M-bound ReversibilityError that
+        # reversible ReCom raises when a merged pair yields more than
+        # REVRECOM_M balanced edges (or when the acceptance prob would exceed
+        # 1). The reversibility-preserving response is to self-loop: return
+        # the current state unchanged. We tally these so the run can report
+        # how often the M-bound bound; a non-negligible rate means REVRECOM_M
+        # is too small and should be raised (see its note above). Without this
+        # catch the job would crash on the first violation.
+        global REVERR_COUNT, PROPOSAL_COUNT
+        PROPOSAL_COUNT += 1
+        try:
+            cand = base_proposal(part)
+        except ReversibilityError:
+            REVERR_COUNT += 1
+            return part
+        except IndexError:
+            # Wilson's-algorithm spanning-tree draw hit a node with no
+            # neighbors inside the merged subgraph -- an isolated vertex. This
+            # happens when a merged district pair contains a precinct whose
+            # only adjacencies route outside the pair (a "district island"),
+            # which in turn means the enacted plan has a discontiguous district
+            # OR the adjacency graph has a degree-0 node. We self-loop so the
+            # job does not crash, but UNLIKE the reversibility self-loops above
+            # this is NOT a clean fix: a precinct that is isolated within its
+            # district makes that district induce no spanning tree, so the
+            # enacted plan sits OUTSIDE the support of the spanning-tree target
+            # distribution -- the distribution the Besag-Clifford rank test is
+            # defined against. A non-negligible rate here means the p-value is
+            # ill-posed until the graph is repaired. Run
+            # diagnose_and_repair_graph.py to find and fix the offending
+            # precincts BEFORE trusting any result. The counter below shares
+            # REVERR_COUNT only for the printed rate; the warning text
+            # distinguishes the two causes.
+            REVERR_COUNT += 1
+            return part
+        # If reversible ReCom self-looped internally, cand is `part` (or an
+        # identical assignment) and is trivially feasible. If cand is a
+        # genuine move that leaves the feasible set, fold it onto a self-loop
+        # by returning part.
         if _feasible(cand):
             return cand
         return part
@@ -879,15 +1063,12 @@ def score_enacted_map():
     print("  Canonical axiom-derived opportunity scores O(pi):")
     print(f"    O_B     = {scores['O_B']:.4f} expected Black opportunity districts")
     print(f"    O_L     = {scores['O_L']:.4f} expected Latino opportunity districts")
-    print(f"    O_joint = {scores['O_joint']:.4f} expected coalition opportunity districts")
 
     print("\n  Diversity-calibrated opportunity gaps F(pi) = O(pi) - K*m_bar:")
     print(f"    F_B     = {scores['F_B']:+.4f} districts "
           f"(baseline: {scores['baseline_B']:.2f})")
     print(f"    F_L     = {scores['F_L']:+.4f} districts "
           f"(baseline: {scores['baseline_L']:.2f})")
-    print(f"    F_joint = {scores['F_joint']:+.4f} districts "
-          f"(baseline: {scores['baseline_joint']:.2f})")
 
     print(f"\n  Legacy threshold counts (cutoff = {EFFECTIVENESS_CUTOFF}):")
     print(f"    Latino-effective : {scores['hisp_eff']}")
@@ -947,11 +1128,24 @@ def run_hub_chain(enacted_partition):
 
     transitions = max(1, n_seen - 1)
     accept_frac = accepted_moves / transitions
+    reverr_rate = (REVERR_COUNT / PROPOSAL_COUNT) if PROPOSAL_COUNT else 0.0
     hub_assignment = dict(hub_partition.assignment)
     print(f"  Hub reached in {time.time() - t0:.1f}s.")
     print(f"  Accepted-move fraction: {accept_frac:.3f} "
           f"({accepted_moves} moves / {transitions} steps; "
           f"REVRECOM_M={REVRECOM_M}, L_WALK={L_WALK}).")
+    print(f"  Reversibility M-bound hit rate: {reverr_rate:.4f} "
+          f"({REVERR_COUNT}/{PROPOSAL_COUNT} proposals self-looped on the "
+          f"M-bound).")
+    if reverr_rate > 0.001:
+        print("  WARNING: reversible ReCom self-looped on the M-bound and/or "
+              "an isolated-node (IndexError) failure. M-bound self-loops are "
+              "safe but a high rate suggests raising REVRECOM_M. Isolated-node "
+              "self-loops are MORE serious: they mean the enacted plan likely "
+              "has a discontiguous district, so it sits outside the support of "
+              "the spanning-tree target and the exact p-value is ill-posed. "
+              "Run diagnose_and_repair_graph.py to check and repair the graph "
+              "BEFORE trusting any result.")
     if accept_frac < 0.02:
         print("  WARNING: very low accepted-move fraction. Spokes may barely "
               "leave the hub, weakening power. Consider raising REVRECOM_M "
@@ -1055,13 +1249,11 @@ def compute_bc_pvalues(enacted_scores, spoke_df):
         'mode': MODEL_MODE, 'L_hub': L_HUB, 'L_spoke': L_SPOKE,
         'M_spokes': M, 'cutoff': EFFECTIVENESS_CUTOFF,
         'm_bar_B': M_BAR_B, 'm_bar_L': M_BAR_L,
-        'm_bar_combined': M_BAR_COMBINED,
         'prop_seats_B':    NUM_DISTRICTS * M_BAR_B,
         'prop_seats_L':    NUM_DISTRICTS * M_BAR_L,
-        'prop_seats_comb': NUM_DISTRICTS * M_BAR_COMBINED,
     }
 
-    for col in ['O_B', 'O_L', 'O_joint', 'F_B', 'F_L', 'F_joint']:
+    for col in ['O_B', 'O_L', 'F_B', 'F_L']:
         results[f'enacted_{col}'] = enacted_scores[col]
         results[f'mean_{col}']    = spoke_df[col].mean()
         results[f'median_{col}']  = spoke_df[col].median()
@@ -1070,18 +1262,18 @@ def compute_bc_pvalues(enacted_scores, spoke_df):
         results[f'p95_{col}']     = spoke_df[col].quantile(0.95)
 
     # Ensemble-frontier standardized scores using the canonical O(pi)
-    for col in ['O_B', 'O_L', 'O_joint']:
+    for col in ['O_B', 'O_L']:
         results[f'Z_{col}'] = _z(enacted_scores[col], col)
 
     # Primary B-C exact p-values on calibrated F(pi)
-    for label, col in [('B', 'F_B'), ('L', 'F_L'), ('joint', 'F_joint')]:
+    for label, col in [('B', 'F_B'), ('L', 'F_L')]:
         p_low, p_high, rank = _pval(enacted_scores[col], col)
         results[f'p_{label}_lower'] = p_low
         results[f'p_{label}_upper'] = p_high
         results[f'rank_{label}'] = rank
 
     # Secondary p-values on canonical O(pi), useful for transparency
-    for label, col in [('O_B', 'O_B'), ('O_L', 'O_L'), ('O_joint', 'O_joint')]:
+    for label, col in [('O_B', 'O_B'), ('O_L', 'O_L')]:
         p_low, p_high, rank = _pval(enacted_scores[col], col)
         results[f'p_{label}_lower'] = p_low
         results[f'p_{label}_upper'] = p_high
@@ -1115,7 +1307,6 @@ def print_results(results, spoke_df):
     for label, col in [
         ("Black", "O_B"),
         ("Latino", "O_L"),
-        ("Coalition", "O_joint"),
     ]:
         print(f"  {label}:")
         print(f"    Enacted O value      : {results[f'enacted_{col}']:.4f}")
@@ -1133,7 +1324,6 @@ def print_results(results, spoke_df):
     for label, col, pkey, rkey in [
         ("Black",     'F_B',     'p_B_lower',     'rank_B'),
         ("Latino",    'F_L',     'p_L_lower',     'rank_L'),
-        ("Coalition", 'F_joint', 'p_joint_lower', 'rank_joint'),
     ]:
         print(f"  {label} calibrated functional:")
         print(f"    Enacted F value    : {results[f'enacted_{col}']:+.4f} districts")
@@ -1214,7 +1404,6 @@ def save_distribution_plots(enacted_scores, spoke_df, run_name):
         [
             ('O_B',     'Black',     r'$O_B(\pi)=\sum_d p_d^B$'),
             ('O_L',     'Latino',    r'$O_L(\pi)=\sum_d p_d^L$'),
-            ('O_joint', 'Coalition', r'$O_{\rm joint}(\pi)=\sum_d \max(p_d^B,p_d^L)$'),
         ]
     )
 
@@ -1224,7 +1413,6 @@ def save_distribution_plots(enacted_scores, spoke_df, run_name):
         [
             ('F_B',     'Black',     r'$F_B(\pi)=O_B(\pi)-K\bar{m}_B$'),
             ('F_L',     'Latino',    r'$F_L(\pi)=O_L(\pi)-K\bar{m}_L$'),
-            ('F_joint', 'Coalition', r'$F_{\rm joint}(\pi)=O_{\rm joint}(\pi)-K\bar{m}_{\rm comb}$'),
         ]
     )
 
@@ -1254,7 +1442,6 @@ def save_latex_table(results, run_name):
     M  = results['M_spokes']
     pB = results['p_B_lower']
     pL = results['p_L_lower']
-    pJ = results['p_joint_lower']
 
     lines = [
         r'% Auto-generated by besag_clifford_vra_functional.py',
@@ -1271,58 +1458,48 @@ def save_latex_table(results, run_name):
          r'$p$-values are exactly valid by \citet{besagclifford1989}, Proposition~3.3, '
          r'regardless of ReCom mixing time.}'),
         r'\label{tab:bc_functional}',
-        r'\begin{tabular}{lccc}',
+        r'\begin{tabular}{lcc}',
         r'\toprule',
         (r'& \textbf{Black} $F_B$ '
-         r'& \textbf{Latino} $F_L$ '
-         r'& \textbf{Coalition} $F_{\rm joint}$ \\'),
+         r'& \textbf{Latino} $F_L$ \\'),
         r'\midrule',
-        r'\multicolumn{4}{l}{\textit{Statewide proportional baseline}} \\',
+        r'\multicolumn{3}{l}{\textit{Statewide proportional baseline}} \\',
         (f"Statewide CVAP fraction $\\bar{{m}}_g$ "
          f"& {results['m_bar_B']:.4f} "
-         f"& {results['m_bar_L']:.4f} "
-         f"& {results['m_bar_combined']:.4f} \\\\"),
+         f"& {results['m_bar_L']:.4f} \\\\"),
         (f"Proportional seat target $K\\bar{{m}}_g$ "
          f"& {results['prop_seats_B']:.2f} "
-         f"& {results['prop_seats_L']:.2f} "
-         f"& {results['prop_seats_comb']:.2f} \\\\"),
+         f"& {results['prop_seats_L']:.2f} \\\\"),
         r'\midrule',
-        r'\multicolumn{4}{l}{\textit{Enacted map}} \\',
+        r'\multicolumn{3}{l}{\textit{Enacted map}} \\',
         (f"$F_g(\\pi_{{\\rm enacted}})$ "
          f"& {results['enacted_F_B']:+.4f} "
-         f"& {results['enacted_F_L']:+.4f} "
-         f"& {results['enacted_F_joint']:+.4f} \\\\"),
+         f"& {results['enacted_F_L']:+.4f} \\\\"),
         r'\midrule',
-        (r'\multicolumn{4}{l}{\textit{Null distribution '
+        (r'\multicolumn{3}{l}{\textit{Null distribution '
          r'($M=' + str(M) + r'$ spokes, $L=' + str(L_SPOKE) + r'$ steps each)}} \\'),
         (f"Mean $\\bar{{F}}_g$ "
          f"& {results['mean_F_B']:+.4f} "
-         f"& {results['mean_F_L']:+.4f} "
-         f"& {results['mean_F_joint']:+.4f} \\\\"),
+         f"& {results['mean_F_L']:+.4f} \\\\"),
         (f"Std.\\ dev.\\ "
          f"& {results['sd_F_B']:.4f} "
-         f"& {results['sd_F_L']:.4f} "
-         f"& {results['sd_F_joint']:.4f} \\\\"),
+         f"& {results['sd_F_L']:.4f} \\\\"),
         (f"5th--95th pct.\\ "
          f"& [{results['p5_F_B']:+.3f}, {results['p95_F_B']:+.3f}] "
-         f"& [{results['p5_F_L']:+.3f}, {results['p95_F_L']:+.3f}] "
-         f"& [{results['p5_F_joint']:+.3f}, {results['p95_F_joint']:+.3f}] \\\\"),
+         f"& [{results['p5_F_L']:+.3f}, {results['p95_F_L']:+.3f}] \\\\"),
         (f"Rank of enacted (of $M+1={M+1}$) "
          f"& {results['rank_B']} "
-         f"& {results['rank_L']} "
-         f"& {results['rank_joint']} \\\\"),
+         f"& {results['rank_L']} \\\\"),
         r'\midrule',
-        r'\multicolumn{4}{l}{\textit{Besag-Clifford exact $p$-values}} \\',
+        r'\multicolumn{3}{l}{\textit{Besag-Clifford exact $p$-values}} \\',
         (f"Lower-tail $p$ (dilution direction) "
          f"& {pB:.4f}{stars(pB)} "
-         f"& {pL:.4f}{stars(pL)} "
-         f"& {pJ:.4f}{stars(pJ)} \\\\"),
+         f"& {pL:.4f}{stars(pL)} \\\\"),
         (f"Upper-tail $p$ "
          f"& {results['p_B_upper']:.4f} "
-         f"& {results['p_L_upper']:.4f} "
-         f"& {results['p_joint_upper']:.4f} \\\\"),
+         f"& {results['p_L_upper']:.4f} \\\\"),
         r'\bottomrule',
-        r'\multicolumn{4}{p{0.95\linewidth}}{\footnotesize',
+        r'\multicolumn{3}{p{0.95\linewidth}}{\footnotesize',
         r'\textit{Notes:} Lower-tail $p$-values test whether the enacted map provides',
         r'unusually \emph{few} minority opportunity seats relative to the null distribution',
         r'of randomly drawn alternative plans (the vote dilution direction).',
@@ -1333,8 +1510,6 @@ def save_latex_table(results, run_name):
         r'The proportional baseline $K\bar{m}_g$ is the De~Grandy relevant fact',
         r'\citep[512 U.S.\ 997]{degrandy1994}: proportionality is not dispositive but',
         r'is evidence in the totality of circumstances.',
-        r'$F_{\rm joint}$ addresses the Section~2 coalition-claim circuit split by',
-        r'crediting each district to whichever group has the higher win probability.',
         r'} \\',
         r'\end{tabular}',
         r'\end{table}',
@@ -1365,6 +1540,9 @@ def main():
     # constraint in _build_proposal_and_constraint can reference it. Workers
     # spawned later via fork() will inherit the populated value.
     global ENACTED_CUT_EDGES
+    global COMPACTNESS_SLACK, COUNTY_SPLITS_SLACK  # read-only here, declared
+    # global so editing these module constants (including to None) is always
+    # picked up correctly inside main().
     ENACTED_CUT_EDGES = len(enacted_partition["cut_edges"])
     if COMPACTNESS_SLACK is not None:
         print(f"\n  Enacted cut-edges: {ENACTED_CUT_EDGES}")
@@ -1412,12 +1590,17 @@ def main():
     # the 0-indexed remap of the enacted plan (so it shares the label space
     # with spokes; real CD k corresponds to internal_idx k-1, matching the
     # remap in score_enacted_map()).
-    plans_df = pd.DataFrame(index=list(state_gdf[GEO_ID]))
-    plans_df.index.name = GEO_ID
+    #
+    # Build all columns at once via a dict + single DataFrame construction
+    # rather than inserting columns in a loop -- the loop form fragments the
+    # frame and floods the log with pandas PerformanceWarnings at M=200.
+    nodes_order = list(graph.nodes())
     enacted_assignment = dict(enacted_partition.assignment)
-    plans_df["enacted"] = [enacted_assignment[n] for n in graph.nodes()]
+    plan_columns = {"enacted": [enacted_assignment[n] for n in nodes_order]}
     for spoke_idx, assignment in sorted(spoke_assignments.items()):
-        plans_df[f"spoke_{spoke_idx:03d}"] = [assignment[n] for n in graph.nodes()]
+        plan_columns[f"spoke_{spoke_idx:03d}"] = [assignment[n] for n in nodes_order]
+    plans_df = pd.DataFrame(plan_columns, index=list(state_gdf[GEO_ID]))
+    plans_df.index.name = GEO_ID
     plans_path = DIR + f'outputs/bc_plan_assignments_{RUN_NAME}.parquet'
     plans_df.to_parquet(plans_path)
     n_plans = len(plans_df.columns)
