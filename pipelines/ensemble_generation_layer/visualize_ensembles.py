@@ -121,34 +121,32 @@ def plot_side_by_side(state_gdf, plans_df, geo_id_col,
                       enacted_col, alt_col, alt_label,
                       out_pdf: Path, out_png: Path,
                       num_districts: int):
-    """Render two choropleth maps side-by-side: enacted vs. alternative."""
+    """Render two choropleth maps side-by-side: enacted vs. alternative.
+
+    No on-figure text (panel titles or suptitle): the maps are kept clean
+    for publication and all descriptive information is printed to the
+    console as a [caption] line for use in the LaTeX figure caption.
+    """
     fig, axes = plt.subplots(1, 2, figsize=(20, 10), constrained_layout=True)
 
     cmap, norm = _categorical_district_cmap(num_districts)
 
-    for ax, col, title in zip(
-        axes, [enacted_col, alt_col],
-        ["Enacted Texas Congressional Map", alt_label],
-    ):
+    for ax, col in zip(axes, [enacted_col, alt_col]):
         gdf_with_dist = merge_assignment_into_gdf(
             state_gdf, plans_df, col, geo_id_col)
         gdf_with_dist.plot(
             column="district", cmap=cmap, norm=norm,
             linewidth=0, ax=ax, antialiased=False,
         )
-        ax.set_title(title, fontsize=14)
         ax.set_axis_off()
-
-    fig.suptitle(
-        "Enacted Plan vs. Alternative Plan from Besag-Clifford Ensemble",
-        fontsize=16, fontweight="bold",
-    )
 
     fig.savefig(out_pdf, dpi=150, bbox_inches="tight")
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {out_pdf.name}")
     print(f"  Saved: {out_png.name}")
+    print(f"  [caption] Left: enacted Texas congressional plan (PLANC2333). "
+          f"Right: {alt_label}. Each color is one of {num_districts} districts.")
 
 
 # ============================================================
@@ -239,14 +237,7 @@ def plot_effective_heatmap(state_gdf, plans_df, geo_id_col, spoke_columns,
     plot_gdf.plot(
         column="fraction_effective", cmap="viridis", linewidth=0,
         antialiased=False, legend=True, ax=ax,
-        legend_kwds={"label": f"Fraction of spokes (n={n_spokes})",
-                     "shrink": 0.6},
-    )
-    ax.set_title(
-        f"{group_label} demographic-opportunity heatmap\n"
-        f"(precinct = colored by fraction of spokes where it sat in a "
-        f"district with {cvap_col}/{cvap_total_col} > {threshold:.0%})",
-        fontsize=13,
+        legend_kwds={"shrink": 0.6},
     )
     ax.set_axis_off()
 
@@ -255,6 +246,19 @@ def plot_effective_heatmap(state_gdf, plans_df, geo_id_col, spoke_columns,
     plt.close(fig)
     print(f"  Saved: {out_pdf.name}")
     print(f"  Saved: {out_png.name}")
+    # Caption-ready text + summary stats. The colorbar (0..1) stays on the
+    # figure because it is the only key to the color scale; everything else
+    # goes to the console.
+    n_any = int((fraction > 0).sum())
+    n_majority = int((fraction >= 0.5).sum())
+    print(f"  [caption] {group_label} demographic-opportunity heatmap. Each "
+          f"precinct is colored by the fraction of the {n_spokes} "
+          f"Besag-Clifford spoke plans in which it was assigned to a district "
+          f"whose {cvap_col}/{cvap_total_col} share exceeds {threshold:.0%}. "
+          f"Colorbar runs 0 to 1.")
+    print(f"  [stats] fraction>0 in {n_any}/{len(fraction)} precincts; "
+          f"fraction>=0.5 in {n_majority}/{len(fraction)}; "
+          f"max={fraction.max():.3f}, mean={fraction.mean():.3f}.")
 
 
 # ============================================================
@@ -274,7 +278,7 @@ def main():
         help="Directory containing the chain output files (default: ./outputs)",
     )
     parser.add_argument(
-        "--alt-metric", default="O_L", choices=["O_B", "O_L", "O_joint"],
+        "--alt-metric", default="O_L", choices=["O_B", "O_L"],
         help="Which spoke metric to maximize when picking the alternative "
              "plan for side-by-side comparison (default: O_L)",
     )
@@ -318,8 +322,9 @@ def main():
             f"Metric {metric!r} not in scores_df columns: "
             f"{list(scores_df.columns)}")
 
-    best_idx     = int(scores_df.iloc[scores_df[metric].idxmax()]["spoke"])
-    best_metric  = float(scores_df.iloc[scores_df[metric].idxmax()][metric])
+    best_row     = scores_df.loc[scores_df[metric].idxmax()]
+    best_idx     = int(best_row["spoke"])
+    best_metric  = float(best_row[metric])
     best_col     = f"spoke_{best_idx:03d}"
     if best_col not in plans_df.columns:
         raise ValueError(f"{best_col} not in plans_df.")
