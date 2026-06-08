@@ -228,77 +228,96 @@ pytest tests/
 ├── LICENSE
 ├── Makefile
 ├── README.md
-├── code
-│   ├── datasets
-    │   ├── 01_eda_district_shpfile.ipynb  # cleaning congressional district geospatial data
-    │   ├── 02_eda_census_data.ipynb    # cleaning Census racial demographics data 
-    │   ├── 03_eda_census_shpfile.ipynb    # cleaning census block geospatial data
-    │   ├── 04_eda_vtd_election_results.ipynb   # cleaning election results data
-    │   └── 05_eda_vtd_shpfile.ipynb   # cleaning precinct geospatial data
-    │   ├── models
-        │   ├── finite_mixture_model
-│   │            │   └── finite_mixture_model.ipynb 
-│   │   │   ├── linear_regression_classifier
-│   │       │   ├── 01_preprocess.ipynb    
-│   │       │   ├── 02_train.ipynb  
-│   │       │   └── 03_evaluate.ipynb 
-        │   └── kmeans_clustering 
-            │   ├── 01_preprocess.ipynb   
-            │   ├── 02_train.ipynb  
-            │   └── 03_evaluate.ipynb
-├── data
-│   ├── processed
-│   └── raw
-│   │   ├── 2024-general-vtds-election-data  # precinct-level election results data
-│   │   ├── PLANC2333    # congressional districts geospatial data 
-│   │   │   ├── PLANC2333.cpg    #identity character encoding
-│   │   │   ├── PLANC2333.dbf    #tabular attribute information
-│   │   │   ├── PLANC2333.prj    #Coordinate System information
-│   │   │   ├── PLANC2333.shp    # Feature Geometry
-│   │   │   ├── PLANC2333.shp.ea.iso    # International Organization for Standardization metadata in XML
-│   │   │   └── PLANC2333.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML
-    │   ├── tl_2020_48_tabblock20    # census block geospatial data
-            │   ├── tl_2020_48_tabblock.cpg    #identity character encoding
-            │   ├── tl_2020_48_tabblock.dbf    #tabular attribute information
-            │   ├── tl_2020_48_tabblock.prj    #Coordinate System information
-            │   ├── tl_2020_48_tabblock.shp    # Feature Geometry
-            │   ├── tl_2020_48_tabblock.shp.ea.iso    # International Organization for Standardization metadata in XML
-            │   └── tl_2020_48_tabblock20.shp.iso.xml   # Entity and attribute of ISO 191 metadata in XML 
-    │   ├── tx_pl2020_official   # census racial demographics data
-    │   └── vtds_24pg   # voting district geospatial data
-├── docs #docs to be published on project website
-│   ├── docs
-    │   ├── code.md  # readme regarding code
-    │   ├── data.md    # readme regarding data
-    │   ├── index.md   # readme for project
-    │   ├── models.md   # readme for machine learning models
-    │   └── references.md   # readme for references used
-├── pipelines    
-    │   ├── data
-    │   │   ├── __init__.py
-    │   │   ├── cli.py
-    │   │   ├── demographics.py
-    │   │   ├── districts.py
-    │   │   ├── elections.py
-    │   │   ├── io.py
-    │   │   └── keys.py
-    │   ├── ensembles
-    │   │   └── generate_recom_ensemble.py
-    │   └── redistricting
-    │   │   ├── __init__.py
-    │   │   ├── aggregates.py
-    │   │   ├── build_ensemble_plans.py
-    │   │   ├── cli.py
-    │   │   ├── config.py
-    │   │   ├── db.py
-    │   │   └── keys.py
 ├── pyproject.toml
-├── reports
-│   └── figures
 ├── requirements.txt
-└── texas_gerrymandering_hb4
+│
+├── data
+│   └── raw                                      # original, immutable source data
+│       ├── 2024-general-vtds-election-data/     # precinct-level election returns & VRTO (CSV)
+│       ├── CVAP_2020-2024_ACS_csv_files/        # Citizen Voting Age Population (ACS)
+│       │   └── Tract.csv
+│       ├── PLANC2333/                           # congressional districts geospatial data (shapefile)
+│       ├── tl_2020_48_tabblock20/               # 2020 census block geospatial data (shapefile)
+│       ├── tx_pl2020/                           # 2020 Census PL 94-171 redistricting data
+│       ├── vtds_24pg/                           # 2024 voting district geospatial data (shapefile)
+│       ├── Candidate_Race_Party.csv
+│       ├── TX_elections.csv
+│       ├── dropped_elecs.csv
+│       └── recency_weights.csv
+│
+├── docs                                         # MkDocs site published to the project website
+│   ├── README.md
+│   ├── mkdocs.yml
+│   └── docs
+│       ├── bayesian.md
+│       ├── code.md
+│       ├── data.md
+│       ├── index.md
+│       ├── models.md
+│       └── references.md
+│
+├── images                                       # figures embedded in docs / README (PNG, JPG)
+│
+├── notebooks                                    # exploratory analysis & model development
+│   ├── datasets
+│   │   ├── data/artifacts/                      # intermediate CSV artifacts
+│   │   ├── processed/
+│   │   │   └── eda_vtds.ipynb
+│   │   └── raw
+│   │       ├── 01_eda_district_shpfile.ipynb    # congressional district geospatial EDA
+│   │       ├── 02_eda_census_data.ipynb         # Census racial demographics EDA
+│   │       ├── 03_eda_census_shpfile.ipynb      # census block geospatial EDA
+│   │       ├── 05_eda_vtd_shapefile.ipynb       # precinct geospatial EDA
+│   │       ├── 06_eda_final_dataset.ipynb       # consolidated dataset EDA
+│   │       ├── 07_generate_racial_maps.ipynb    # racial composition maps
+│   │       ├── eda_dem_primary_results.ipynb
+│   │       └── eda_rep_primary_results.ipynb
+│   └── models
+│       └── kmeans_clustering
+│           ├── 01_preprocess.ipynb
+│           ├── 02_train.ipynb
+│           ├── 03_evaluate.ipynb
+│           ├── 04_map_generation.ipynb
+│           └── artifacts/                        # scalers, models, cluster outputs
+│
+├── pipelines                                    # end-to-end data & modeling pipeline
+│   ├── data_engineering_layer                   # ingest, join, validate, build datasets
+│   │   ├── demographics.py
+│   │   ├── ei_export.py
+│   │   ├── elections.py
+│   │   ├── ingest.py
+│   │   ├── join.py
+│   │   ├── nonzero_returns.py
+│   │   ├── pipeline.py
+│   │   ├── run_table3.py
+│   │   ├── schema.py
+│   │   ├── sensitivity.py
+│   │   ├── spatial.py
+│   │   ├── table3_diagnostics.py
+│   │   ├── time_pipeline.py
+│   │   └── validate.py
+│   ├── ecological_inference_layer               # Bayesian ecological inference
+│   │   ├── ablation_point_estimate_v_uncertainty.py
+│   │   ├── build_calibration_data.py
+│   │   ├── diagnose_empty_candidates.py
+│   │   ├── generate_ei_results.py
+│   │   ├── generate_tx_logit_params.py
+│   │   ├── post_ei_processing.py
+│   │   └── run_ei.py
+│   └── ensemble_generation_layer                # redistricting ensemble generation
+│       ├── besag_clifford_vra_opportunity.py
+│       ├── run_functions.py
+│       └── visualize_ensembles.py
+│
+├── reports
+│   └── figures                                  # publication-ready figures (EPS)
+│
+├── tests                                        # test suite
+│
+└── texas_gerrymandering_hb4                     # shared project package
     ├── __init__.py
-    └── config.py
+    ├── config.py
+    └── plots.py
 ```
 
 ---
