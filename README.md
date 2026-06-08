@@ -5,14 +5,10 @@
     <img src="images/texas_flag.jpg" alt="texas" width="80" height="80">
   </a>
 
-  <h3 align="center">A Novel Computational Framework for Detecting Illegal Negative Gerrymandering Practices in America</h3>
+  <h3 align="center">A Spatial Graph Framework for Conditional Finite-Sample,
+Uncertainty-Aware Redistricting Ensemble Evaluation</h3>
 
   <p align="center">
-    Leveraging machine learning and Bayesian statistical techniques to detect illegal negative racial gerrymandering practices i Texas after the 2025 HB4 mid-decade redistricting.
-    <br />
-    <a href=""><strong>Explore Docs »</strong></a>
-    <br />
-    <br />
     <a href="https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
     &middot;
     <a href="https://github.com/algorithmicprogrammer/texas-gerrymandering-hb4/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
@@ -45,21 +41,25 @@
 </details>
 
 ## About the Project
-This experiment introduces a novel computational framework to detect illegal negative racial ger-
-rymandering practices in America; this framework is applied to Texas’s mid-decade redistricting
-following the 2025 passage of HB4. Leveraging a reproducible workflow, we combine Texas Leg-
-islative Council shapefiles, U.S. Census Redistricting Data, U.S. Census TIGER/LINE shapefiles,
-and precinct-level election returns to build a consolidated dataset providng the racial demographic,
-partisan, and geometric compactness measures of each Congressional district.
-
-After an extensive data consolidation process via a custom data pipeline, we implement unsupervised
-machine learning and Bayesian inference techniques. K-means clustering is used to assess how racial
-composition features affect the clustering of the districts. A two-component Gaussian finite mixture
-model reveals two clusters of districts: one that is compact and stable in regards to racial composition
-features, and one that is less compact and more prone to gerrymandering.
-
-Our work contributes the first end-to-end open and reproducible framework for evaluating illegal
-negative racial gerrymandering practices, with direct implications towards redistricting worldwide
+Evaluation of enacted redistricting plans is a spatial problem at
+its core, as it requires transforming heterogeneous geographic,
+demographic, and electoral data into a constrained spatial graph
+partitioning, while carrying uncertainty forward from upstream
+behavioral models. We present an auditable spatial graph framework for uncertainty-aware redistricting ensemble evaluation. The
+framework harmonizes public redistricting inputs into a validated
+precinct-level adjacency graph, estimates racially polarized voting
+with Bayesian ecological inference, compresses posterior uncertainty into reusable scoring summaries, and compares enacted plans
+to constrained alternatives using a reversible redistricting kernel
+with Besag-Clifford finite-sample rank inference. We introduce
+an expected-count minority-preferred-candidate opportunity functional that scores a plan as the expected number of districts in
+which a protected group’s candidate of choice prevails, avoiding
+discontinuities induced by threshold-based opportunity counts. In a
+Texas congressional case study using PLANC2333, the enacted plan
+attains the lower-tail resolution floor for Latino opportunity among
+1,000 Besag-Clifford spoke plans, while Black opportunity is below
+the ensemble mean but not a statistical outlier. The results show
+how spatial data integration, graph construction, uncertainty propagation, constrained partition sampling, and finite-sample inference
+can be combined into a reproducible workflow for high-stakes spatial decision support.
 
 ### Data Sources
 <ul>
