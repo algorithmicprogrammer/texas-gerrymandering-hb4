@@ -22,8 +22,6 @@ Uncertainty-Aware Redistricting Ensemble Evaluation</h3>
     <li>
       <a href="#about-the-project">About The Project</a>
       <ul>
-        <li><a href="#project-website">Project Website</a></li>
-        <li><a href="#paper-rough-draft">Paper Rough Draft</a></li>
         <li><a href="#data-sources">Data Sources</a></li>
         <li><a href="#technologies-used">Technologies Used</a></li>
       </ul>
@@ -67,50 +65,32 @@ can be combined into a reproducible workflow for high-stakes spatial decision su
     <a href="https://data.capitol.texas.gov/dataset/planc2335/resource/3552af40-54c1-45f2-9b02-b3c560bc0879">
     Texas Legislative Council Congressional District Geospatial Data (PLANC2333 Shapefile)
     </a>
-      <ul>
-        <li>The new district map's geospatial data is used for computing compactness scores, which are a widely-accepted indicator of gerrymandering.
-        This shapefile contains the district geometries that will be compared against Census/election results data.
-        </li>
-      </ul>
   </li> 
   <li>
     <a href="https://redistrictingdatahub.org/data/about-our-data/pl-94171-dataset/">
     2020 Decennial Census RPL-94-171 Dataset
     </a>  
   </li>
-    <ul>
-      <li>This dataset, provided by Redistricting Data Hub, includes racial demogrpahics and population information from the 2020 Census.</li>
-    </ul>
   <li>
     <a href="https://www2.census.gov/geo/tiger/TIGER2020PL/LAYER/tl_2020_48_tabblock20.zip">
     2020 Texas U.S. Census Blocks Geospatial Data (tl_2020_48_tabblock20 Shapefile)
     </a>
-      <ul>
-        <li>
-        The geospatial data for the 2020 Texas U.S. Census blocks will be joined with the census block-level voter age population demographics from the 2020 
-        Decennial Censusu Redistricting dataset.
-        The census block geospatial data will be overlayed with the new district map's geospatial data to map racial composition in each congressional district.
-        </li>
-      </ul>
   </li>
   <li>
     <a href="https://data.capitol.texas.gov/dataset/comprehensive-election-datasets-compressed-format/resource/e1cd6332-6a7a-4c78-ad2a-852268f6c7a2">
     Texas Legislative Council 2024 Voting Districts General Election Data  
     </a>
-      <ul>
-        <li>Precinct-level election results data will be used to compute precinct-level votes by party. This dataset will be used to quantify partisanship in congressional districts; unfortunately, Texas voter registration does not record party affiliation, so this dataset is our most reliable source of partisanship information.</li>
-      </ul>
   </li>
   <li>
     <a href="https://data.capitol.texas.gov/dataset/4d8298d0-d176-4c19-b174-42837027b73e/resource/906f47e4-4e39-4156-b1bd-4969be0b2780/download/vtds_24pg.zip">
       Texas Legislative Council 2024 Primary & General Elections Voting Districts Geospatial Data (vtds_24pg Shapefile)
-    <a>
-      <ul>
-        <li>
-          The Texas voting district geospatial data for the 2024 elections will be joined with the voting district election results. The voting district geospatial data will then be overlayed with 
-          the new district map's geospatial data to map partisanship in each congressional district.
-        </li>  
-      </ul>  
+    </a> 
+  </li>
+
+  <li>
+    <a href="https://www.census.gov/programs-surveys/decennial-census/about/voting-rights/cvap.html">
+      Citizen Voting Age Population (CVAP) Special Tabulation from the 2020-2024 5-Year American Community Survey
+    </a>
   </li>
 </ul>
 
@@ -175,45 +155,42 @@ pip install -r requirements.txt
 ```
 
 6. Run data engineering layer.
-
+```commandline
+cd pipelines/data_engineering_layer
+python pipeline.py
+```
 
 7. Run ecological inference layer.
 
-* Command for Linux/MacOS:
+a. Fit the RxC Bayesian ecological inference model.
 ```commandline
 cd pipelines/ecological_inference_layer
 python run_ei.py
 ```
 
-* Command for Windows 11 Command Prompt:
+b. Reshape the EI outputs into the inputs the ensemble layer expects.
 ```commandline
-
+python post_ei_processing.py
 ```
 
-8. Run redistricting pipeline against ensemble.
-* Command for Linux/MacOS:
-```commandLine
-python -m pipelines.redistricting.cli \
-  --stage all \
-  --geo-vtd data/processed/geo_vtd.parquet \
-  --elections data/processed/elections.parquet \
-  --returns data/processed/election_returns_vtd.parquet \
-  --plans data/processed/plans.parquet \
-  --plan-map data/processed/plan_district_vtd.parquet \
-  --ensemble-plans data/processed/ensemble_plans.parquet \
-  --ensemble-plan-map data/processed/ensemble_plan_district_vtd.parquet \
-  --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --ei-election-id TX_SEN_2024_GEN \
-  --ei-run-id EI_RUN_002 \
-  --ei-draws 2000 \
-  --ei-tune 3000 \
-  --ei-chains 4 \
-  --ei-target-accept 0.99 \
-  --ei-max-treedepth 15 \
-  --ei-seed 20240101 \
-  --out-dir data/processed/redistricting_exports \
-  --export-format parquet
+c. Build the logistic calibration parameters used to score plans.
+```commandline
+python build_calibration_data.py \
+  --benchmark-elec <general-election-name> \
+  --black-cand AllredD_2G \
+  --latino-cand AllredD_24G \
+  --output calibration.csv
+python generate_tx_logit_params.py --input calibration.csv --output TX_logit_params.csv  
+```
 
+8. Run ensemble generation and inference layer.
+```commandLine
+cd pipelines/ensemble_generation_layer
+python besag_clifford_vra_opportunity.py
+```
+Then generate the comparison maps and opportunity heatmaps from the ensemble outputs:
+```commandline
+python visualize_ensembles.py
 ```
 
 ### Testing
