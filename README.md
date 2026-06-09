@@ -1,4 +1,5 @@
 <!-- PROJECT LOGO -->
+<a id="readme-top"></a>
 <br />
 <div align="center">
   <a href="https://github.com/othneildrew/Best-README-Template">
@@ -96,7 +97,7 @@ can be combined into a reproducible workflow for high-stakes spatial decision su
     </a>
   </li>
 </ul>
-
+<p align="right">(<a href="#readme-top">Back to Top</a>)</p>
 
 
 ### Technologies Used
@@ -110,6 +111,7 @@ can be combined into a reproducible workflow for high-stakes spatial decision su
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/jupyter/jupyter-original-wordmark.svg" alt="jupyter"></code> 
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/markdown/markdown-original.svg" alt="markdown"></code>
 <code><img height="27" src="https://raw.githubusercontent.com/devicons/devicon/master/icons/latex/latex-original.svg" alt="latex"></code> 
+<p align="right">(<a href="#readme-top">Back to Top</a>)</p>
 
 ## Getting Started
 ### Prerequisites
@@ -200,6 +202,7 @@ Then generate the comparison maps and opportunity heatmaps from the ensemble out
 ```commandline
 python visualize_ensembles.py
 ```
+<p align="right">(<a href="#readme-top">Back to Top</a>)</p>
 
 ### Testing
 Run tests.
@@ -304,6 +307,8 @@ pytest tests/
     ├── config.py
     └── plots.py
 ```
+
+<p align="right">(<a href="#readme-top">Back to Top</a>)</p>
 
 ---
 Made with ♥ by Algorithmic Programmer
