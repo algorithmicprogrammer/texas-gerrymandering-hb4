@@ -5,6 +5,9 @@
     <img src="images/texas_flag.jpg" alt="texas" width="80" height="80">
   </a>
 
+![GitHub Created At](https://img.shields.io/github/created-at/algorithmicprogrammer/texas-gerrymandering-hb4)
+![GitHub last commit](https://img.shields.io/github/last-commit/algorithmicprogrammer/texas-gerrymandering-hb4)
+
   <h3 align="center">A Spatial Graph Framework for Conditional Finite-Sample,
 Uncertainty-Aware Redistricting Ensemble Evaluation</h3>
 
