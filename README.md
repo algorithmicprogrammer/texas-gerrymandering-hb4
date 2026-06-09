@@ -174,51 +174,104 @@ venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
 
-6. Run data engineering layer.
+The analysis runs as three sequential pipeline layers. Each layer consumes
+the outputs of the previous one, so run them in order. Before starting,
+make sure the raw source data described in [Data Sources](#data-sources) is
+in place under `data/raw/` (see the [Project Organization](#project-organization)
+tree for the expected layout), and run every command from the repository root
+with the virtual environment activated.
 
+#### 6. Run the data engineering layer
 
-7. Run ecological inference layer.
+Ingests the raw Census (PL 94-171), ACS CVAP, election, and geospatial
+sources; builds demographic variables; crosswalks census blocks to voting
+districts (VTDs); validates integrity; and writes the analysis-ready dataset
+to `data/processed/` (`tx_precincts_final.parquet` and `tx_cvap_for_ei.csv`).
+
+```commandline
+cd pipelines/data_engineering_layer
+python pipeline.py
+cd ../..
+```
+
+#### 7. Run the ecological inference layer
+
+a. Fit the RxC Bayesian ecological inference model. Outputs are written to
+`pipelines/ecological_inference_layer/ei_outputs/`. The run is checkpointed
+per election, so it is safe to resume if interrupted.
 
 * Command for Linux/MacOS:
 ```commandline
 cd pipelines/ecological_inference_layer
-python run_ei.py
+XLA_PYTHON_CLIENT_PREALLOCATE=false python run_ei.py
 ```
 
 * Command for Windows 11 Command Prompt:
 ```commandline
-
+cd pipelines\ecological_inference_layer
+set XLA_PYTHON_CLIENT_PREALLOCATE=false
+python run_ei.py
 ```
 
-8. Run redistricting pipeline against ensemble.
-* Command for Linux/MacOS:
-```commandLine
-python -m pipelines.redistricting.cli \
-  --stage all \
-  --geo-vtd data/processed/geo_vtd.parquet \
-  --elections data/processed/elections.parquet \
-  --returns data/processed/election_returns_vtd.parquet \
-  --plans data/processed/plans.parquet \
-  --plan-map data/processed/plan_district_vtd.parquet \
-  --ensemble-plans data/processed/ensemble_plans.parquet \
-  --ensemble-plan-map data/processed/ensemble_plan_district_vtd.parquet \
-  --ensemble-id ENS_TXCD_2024_recom_v1 \
-  --ei-election-id TX_SEN_2024_GEN \
-  --ei-run-id EI_RUN_002 \
-  --ei-draws 2000 \
-  --ei-tune 3000 \
-  --ei-chains 4 \
-  --ei-target-accept 0.99 \
-  --ei-max-treedepth 15 \
-  --ei-seed 20240101 \
-  --out-dir data/processed/redistricting_exports \
-  --export-format parquet
+b. Reshape the EI outputs into the inputs the ensemble layer expects. This
+writes `statewide_rxc_EI_preferences.csv`, `prec_count_quants.csv`,
+`mean_prec_vote_counts.csv`, and the derived `ingroup_weight.csv` into
+`pipelines/ecological_inference_layer/recom_inputs/`.
 
+```commandline
+python post_ei_processing.py
+```
+
+c. Build the logistic calibration parameters used to score plans. First build
+the calibration table against a benchmark general election, then fit the
+per-(mode, group) logistic models into `TX_logit_params.csv`. The exact
+`--benchmark-elec` name comes from `TX_elections.csv`; run the script once
+without a valid value to print the list of available general elections.
+
+```commandline
+python build_calibration_data.py \
+  --benchmark-elec <general-election-name> \
+  --black-cand AllredD_24G \
+  --latino-cand AllredD_24G \
+  --output calibration.csv
+python generate_tx_logit_params.py --input calibration.csv --output TX_logit_params.csv
+cd ../..
+```
+
+> To skip calibration and use an identity (uncalibrated) mapping instead,
+> run `python generate_tx_logit_params.py --identity --output TX_logit_params.csv`.
+
+d. (Optional) Build publication-ready EI tables and figures:
+
+```commandline
+cd pipelines/ecological_inference_layer
+python generate_ei_results.py
+cd ../..
+```
+
+#### 8. Run the ensemble generation layer
+
+Scores the enacted PLANC2333 map, runs the Besag-Clifford hub/spoke ReCom
+ensemble, and computes finite-sample p-values. Results (CSVs, plan
+assignments, distribution plots, and a LaTeX table) are written to
+`pipelines/ensemble_generation_layer/outputs/`.
+
+```commandline
+cd pipelines/ensemble_generation_layer
+python besag_clifford_vra_opportunity.py
+```
+
+Then generate the comparison maps and opportunity heatmaps from the ensemble
+outputs:
+
+```commandline
+python visualize_ensembles.py
+cd ../..
 ```
 
 ### Testing
-Run tests.
-```
+Run the test suite from the repository root.
+```commandline
 pytest tests/
 ```
 
