@@ -183,6 +183,11 @@ python build_calibration_data.py \
 python generate_tx_logit_params.py --input calibration.csv --output TX_logit_params.csv  
 ```
 
+d. Build publication-ready EI tables and figures.
+```commandline 
+python generate_ei_results.py
+```
+
 8. Run ensemble generation and inference layer.
 ```commandLine
 cd pipelines/ensemble_generation_layer
