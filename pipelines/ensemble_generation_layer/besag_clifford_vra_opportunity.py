@@ -78,6 +78,10 @@ from run_functions import (
     cand_pref_outcome_sum, cand_pref_all_draws_outcomes,
     precompute_state_weights, compute_district_weights
 )
+# Threshold sensitivity sweep over the legacy effectiveness cutoff. Imports
+# nothing from this module at import time (its reconstruction path imports
+# lazily), so there is no circular-import hazard.
+from threshold_sweep import run_sweep
 
 # ============================================================
 # USER PARAMETERS
@@ -693,6 +697,53 @@ def compute_opportunity_functional(prob_dict,
     return scores['F_B'], scores['F_L'], scores['F_joint']
 
 
+def prob_dict_from_partition(partition):
+    """
+    Per-district effectiveness probabilities under the active MODEL_MODE.
+
+    Returns {district_index: (hisp_prob, black_prob, neither_prob)}. This is
+    the single object every downstream statistic is a reduction of: O(pi)
+    sums it, F(pi) centers that sum, and the legacy threshold counts
+    indicator-and-sum it. Factored out of _functional_score_from_partition so
+    the threshold sweep can persist the raw probabilities rather than
+    re-deriving them from a statistic that has already thrown them away.
+    """
+    final_state_prob, final_equal_prob, final_dist_prob = \
+        partition["final_elec_model"]
+
+    return (final_state_prob if MODEL_MODE == 'statewide' else
+            final_equal_prob if MODEL_MODE == 'equal'     else
+            final_dist_prob)
+
+
+def district_prob_rows(partition, plan_label):
+    """
+    Tidy per-district probability rows for one plan.
+
+    Returns a list of {plan, district, p_L, p_B, p_N} dicts -- the input
+    format threshold_sweep.py consumes. Districts whose probabilities came
+    back "N/A" (no minority-preferred candidate in some election set) are
+    emitted as NaN so the sweep can drop that plan the same way the
+    p-value code already drops it.
+    """
+    prob_dict = prob_dict_from_partition(partition)
+    rows = []
+    for d in sorted(prob_dict.keys()):
+        value = prob_dict[d]
+        if value == "N/A":
+            hisp_prob = black_prob = neither_prob = float('nan')
+        else:
+            hisp_prob, black_prob, neither_prob = value
+        rows.append({
+            'plan': plan_label,
+            'district': int(d),
+            'p_L': float(hisp_prob),
+            'p_B': float(black_prob),
+            'p_N': float(neither_prob),
+        })
+    return rows
+
+
 def _functional_score_from_partition(partition):
     """
     Extract O_B, O_L, O_joint and F_B, F_L, F_joint from a partition.
@@ -701,12 +752,7 @@ def _functional_score_from_partition(partition):
     F(pi) is the diversity-calibrated score used for the primary
     lower-tail Besag-Clifford test.
     """
-    final_state_prob, final_equal_prob, final_dist_prob = \
-        partition["final_elec_model"]
-
-    prob_dict = (final_state_prob if MODEL_MODE == 'statewide' else
-                 final_equal_prob if MODEL_MODE == 'equal'     else
-                 final_dist_prob)
+    prob_dict = prob_dict_from_partition(partition)
 
     scores = compute_opportunity_scores(
         prob_dict, M_BAR_B, M_BAR_L, M_BAR_COMBINED
@@ -1163,8 +1209,10 @@ def _spoke_worker(args):
     """
     Worker for a single spoke.
     args = (spoke_index, hub_assignment, seed)
-    Returns (row_dict, assignment_dict) where row_dict is the score row
-    and assignment_dict maps node_id -> 0-indexed district label.
+    Returns (row_dict, assignment_dict, prob_rows) where row_dict is the
+    score row, assignment_dict maps node_id -> 0-indexed district label, and
+    prob_rows carries the per-district probabilities behind the scores (kept
+    so the threshold sweep never has to re-run a chain).
     """
     spoke_idx, hub_assignment, seed = args
     endpoint_assignment = _run_chain_get_endpoint(hub_assignment, L_SPOKE, seed)
@@ -1173,13 +1221,15 @@ def _spoke_worker(args):
                                               assignment=endpoint_assignment,
                                               updaters=my_updaters)
     scores = _functional_score_from_partition(endpoint_partition)
-    return {'spoke': spoke_idx, **scores}, endpoint_assignment
+    prob_rows = district_prob_rows(endpoint_partition, f'spoke_{spoke_idx:03d}')
+    return {'spoke': spoke_idx, **scores}, endpoint_assignment, prob_rows
 
 
 def run_spokes(hub_assignment):
     """
     Spawn M_SPOKES independent chains from hub, each of length L_SPOKE.
-    Returns (DataFrame of scores, dict mapping spoke_idx -> assignment dict).
+    Returns (DataFrame of scores, dict mapping spoke_idx -> assignment dict,
+    list of per-district probability rows across all spokes).
     """
     print(f"\n=== Running {M_SPOKES} spokes "
           f"(L={L_SPOKE} steps each, {N_WORKERS} workers) ===")
@@ -1188,27 +1238,30 @@ def run_spokes(hub_assignment):
     args  = [(i, hub_assignment, seeds[i]) for i in range(M_SPOKES)]
     rows  = []
     spoke_assignments = {}
+    prob_rows = []
 
     if N_WORKERS > 1:
         with mp.Pool(processes=N_WORKERS) as pool:
-            for i, (row, assignment) in enumerate(
+            for i, (row, assignment, probs) in enumerate(
                     pool.imap_unordered(_spoke_worker, args)):
                 rows.append(row)
                 spoke_assignments[row['spoke']] = assignment
+                prob_rows.extend(probs)
                 if (i + 1) % 10 == 0:
                     print(f"  {i+1}/{M_SPOKES} spokes done "
                           f"({time.time()-t0:.0f}s elapsed)")
     else:
         for i, arg in enumerate(args):
-            row, assignment = _spoke_worker(arg)
+            row, assignment, probs = _spoke_worker(arg)
             rows.append(row)
             spoke_assignments[row['spoke']] = assignment
+            prob_rows.extend(probs)
             if (i + 1) % 10 == 0:
                 print(f"  {i+1}/{M_SPOKES} spokes done "
                       f"({time.time()-t0:.0f}s elapsed)")
 
     print(f"  All spokes complete in {time.time()-t0:.1f}s.")
-    return pd.DataFrame(rows), spoke_assignments
+    return pd.DataFrame(rows), spoke_assignments, prob_rows
 
 
 # ============================================================
@@ -1568,7 +1621,7 @@ def main():
     hub_assignment = run_hub_chain(enacted_partition)
 
     # 3. Spoke chains
-    spoke_df, spoke_assignments = run_spokes(hub_assignment)
+    spoke_df, spoke_assignments, spoke_prob_rows = run_spokes(hub_assignment)
 
     # 4. B-C p-values and ensemble-standardized Z scores
     results = compute_bc_pvalues(enacted_scores, spoke_df)
@@ -1607,11 +1660,38 @@ def main():
     print(f"Plan assignments saved: {plans_path} "
           f"({n_plans} plans x {len(plans_df)} precincts)")
 
+    # 6c. Per-district probabilities for every plan. O(pi), F(pi) and the
+    # legacy threshold counts are all reductions of these numbers, so saving
+    # them means any re-reduction -- most importantly the threshold
+    # sensitivity sweep -- can be done later without re-running a chain or a
+    # single EI draw. One row per (plan, district): 39 x (M+1) rows.
+    probs_df = pd.DataFrame(
+        district_prob_rows(enacted_partition, 'enacted') + spoke_prob_rows
+    )
+    probs_path = DIR + f'outputs/bc_district_probs_{RUN_NAME}.parquet'
+    probs_df.to_parquet(probs_path, index=False)
+    print(f"District probabilities saved: {probs_path} "
+          f"({len(probs_df)} plan-district rows)")
+
     # 7. Distribution plots (PDF + PNG)
     save_distribution_plots(enacted_scores, spoke_df, RUN_NAME)
 
     # 8. LaTeX table
     save_latex_table(results, RUN_NAME)
+
+    # 9. Threshold sensitivity sweep. EFFECTIVENESS_CUTOFF = 0.6 is a legacy
+    # convention with no principled justification, so the run reports what
+    # the thresholded count would have said at every cutoff from 0.40 to
+    # 0.80 alongside the continuous functional. Guarded: a plotting or
+    # numerical failure here must not discard a multi-day chain run whose
+    # primary outputs are already on disk.
+    try:
+        run_sweep(probs_df, run_name=RUN_NAME, out_dir=DIR + 'outputs',
+                  spokes_df=spoke_df)
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        print(f"\nWARNING: threshold sweep failed ({exc!r}). Chain outputs "
+              f"above are unaffected; rerun it standalone with "
+              f"`python pipelines/ensemble_generation_layer/threshold_sweep.py`.")
 
     print(f"\nTotal elapsed: {(time.time()-total_start)/60:.1f} minutes")
     print(f"(L_hub={L_HUB}, L_spoke={L_SPOKE}, M_spokes={M_SPOKES}, "
