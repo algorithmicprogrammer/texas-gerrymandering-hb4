@@ -202,6 +202,35 @@ Then generate the comparison maps and opportunity heatmaps from the ensemble out
 ```commandline
 python visualize_ensembles.py
 ```
+
+9. Threshold sensitivity sweep.
+
+`besag_clifford_vra_opportunity.py` runs this automatically at the end of a chain
+run, so this step is only needed to re-sweep an existing run or to change the grid.
+The sweep re-reduces the per-district probabilities the chain already computed into
+the legacy thresholded count
+`C_g(tau) = #{districts d : p_gd >= tau}` at every cutoff from 0.40 to 0.80, and
+reports for each one the enacted count, its Besag-Clifford rank and exact
+lower-tail p-value, how many distinct values the count takes across the spokes,
+the share of spokes in the modal bin, and the Spearman/Pearson association with
+the continuous functional `O_g`. It answers the standard objection that the 0.6
+effectiveness cutoff is unjustified and untested: no EI runs and no ReCom
+simulations are repeated.
+```commandline
+python threshold_sweep.py                          # sweep the saved probabilities
+python threshold_sweep.py --tau-min 0.30 --tau-max 0.90 --tau-step 0.05
+```
+For a run that finished before the probability table was saved, rebuild it from the
+saved plan assignments — this re-scores plans that are already on disk and does
+**not** re-run any chain:
+```commandline
+python threshold_sweep.py --from-assignments --workers 8
+```
+Outputs land in `outputs/`: `threshold_sweep_*.csv` (full grid),
+`threshold_sweep_baseline_*.csv` (continuous `O_g` reference),
+`threshold_sweep_*.tex` (publication table),
+`threshold_sweep_rank_*.pdf/.png` (enacted rank vs. threshold), and
+`threshold_sweep_diagnostics_*.pdf/.png` (how much resolution each cutoff destroys).
 <p align="right">(<a href="#readme-top">Back to Top</a>)</p>
 
 ### Testing
@@ -295,6 +324,7 @@ pytest tests/
 │   └── ensemble_generation_layer                # redistricting ensemble generation
 │       ├── besag_clifford_vra_opportunity.py
 │       ├── run_functions.py
+│       ├── threshold_sweep.py                   # sensitivity of the effectiveness cutoff
 │       └── visualize_ensembles.py
 │
 ├── reports
