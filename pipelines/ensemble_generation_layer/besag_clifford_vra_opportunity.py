@@ -47,6 +47,9 @@ calibration layer:
 import random as stdlib_random
 import time
 import os
+import json as _json
+import platform
+import subprocess
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -118,7 +121,33 @@ from run_functions import (
 # number of *accepted* moves in L_WALK steps is much smaller than L_WALK; if
 # spokes look too close to the hub, raise L_WALK (keeping hub and spoke equal,
 # which is automatic here since both read L_WALK).
-L_WALK    = 50000
+# --- GeoSim revision: environment overrides ---------------------------------
+# Every configuration knob below can be set from the environment, so the
+# chain-length sweep, hub replication, tightened-constraint, and
+# second-enacted-plan runs are launched from a shell script rather than by
+# editing this file between runs. Unset variables reproduce exactly the
+# configuration used for the original submission. The realized values are
+# written to outputs/bc_run_config_<RUN_NAME>.json at the end of main().
+
+
+def _env_int(name, default):
+    v = os.environ.get(name)
+    return default if v is None or v == "" else int(v)
+
+
+def _env_float_or_none(name, default):
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return None if v.strip().lower() in ("none", "null", "off") else float(v)
+
+
+def _env_str(name, default):
+    v = os.environ.get(name)
+    return default if v is None or v == "" else v
+
+
+L_WALK    = _env_int("BC_L_WALK", 50000)
 L_HUB     = L_WALK
 L_SPOKE   = L_WALK
 
@@ -137,8 +166,12 @@ L_SPOKE   = L_WALK
 # not by anything that M trades against. If a reviewer specifically demands
 # 10^-3 resolution, raise this back to 1000 and budget ~5x the wall time;
 # nothing else need change.
-M_SPOKES  = 1000
-N_WORKERS = max(1, mp.cpu_count() - 1)
+M_SPOKES  = _env_int("BC_M_SPOKES", 1000)
+N_WORKERS = _env_int("BC_N_WORKERS", max(1, mp.cpu_count() - 1))
+# Master seed for the whole run. -1 (the default) means "draw one at random and
+# report it"; setting BC_SEED makes a run bit-for-bit reproducible, which is
+# what the hub-replication study varies.
+MASTER_SEED = _env_int("BC_SEED", -1)
 
 # REVRECOM_M: the reversible-ReCom tuning constant M from Cannon, Duchin,
 # Randall & Rule (2022), "Spanning Tree Methods for Sampling Graph
@@ -167,13 +200,16 @@ N_WORKERS = max(1, mp.cpu_count() - 1)
 # target acceptance rate would break reversibility. Start at 50; watch the
 # reported ReversibilityError rate and accepted-move fraction from the hub
 # diagnostic and adjust BEFORE the production run, then leave it fixed.
-REVRECOM_M = 20
+REVRECOM_M = _env_int("BC_REVRECOM_M", 20)
 
-START_MAP  = 'CD'
-RUN_NAME   = 'TX_BC_functional'
-MODEL_MODE = 'statewide'
+START_MAP  = _env_str("BC_START_MAP", 'CD')
+RUN_NAME   = _env_str("BC_RUN_NAME", 'TX_BC_functional')
+MODEL_MODE = _env_str("BC_MODEL_MODE", 'statewide')
 
-EFFECTIVENESS_CUTOFF = 0.6  # kept for legacy comparison columns only
+# Legacy threshold-count cutoff. The threshold ablation now sweeps tau post hoc
+# from the per-district probability vectors recorded for every plan, so this
+# value only controls the legacy *_eff columns.
+EFFECTIVENESS_CUTOFF = float(_env_str("BC_CUTOFF", "0.6"))
 
 # ============================================================
 # FIXED PARAMETERS
@@ -199,7 +235,7 @@ POP_TOL         = 0.05
 # get trapped near the enacted map. Set this to None to disable the
 # compactness constraint (script falls back to ReCom's implicit
 # spanning-tree compactness preference, which is what the paper uses).
-COMPACTNESS_SLACK = 1.5
+COMPACTNESS_SLACK = _env_float_or_none("BC_COMPACTNESS_SLACK", 1.5)
 
 # County-split constraint: reject any proposal that splits more counties
 # than COUNTY_SPLITS_SLACK * (enacted plan's split-county count). A county
@@ -219,7 +255,7 @@ COMPACTNESS_SLACK = 1.5
 #     chain to mix while preserving the constraint's bite.
 #   - 1.5: looser; comparable to the compactness slack above.
 #   - None: disables the constraint.
-COUNTY_SPLITS_SLACK = 1.5
+COUNTY_SPLITS_SLACK = _env_float_or_none("BC_COUNTY_SPLITS_SLACK", 1.5)
 
 # Column in state_gdf that identifies each precinct's county. If this
 # column isn't present, we fall back to the first 3 characters of
@@ -232,6 +268,9 @@ COUNTY_COL = 'COUNTY'
 # _build_proposal_and_constraint from any process.
 ENACTED_CUT_EDGES = None
 ENACTED_COUNTY_SPLITS = None
+# Enacted assignment, published as a module global in main() so forked spoke
+# workers can measure how far each spoke travelled from the observed plan.
+ENACTED_ASSIGNMENT = None
 
 # Per-process counters of reversible-ReCom M-bound violations (ReversibilityError)
 # and total proposal calls. Each forked worker keeps its own; the hub process
@@ -724,8 +763,33 @@ def _functional_score_from_partition(partition):
     else:
         hisp_eff = black_eff = distinct = float('nan')
 
+    # --- GeoSim revision ----------------------------------------------------
+    # Record, for every plan, (a) the aggregate scores under ALL three EI
+    # weighting modes and (b) the raw per-district win-probability vectors.
+    # (a) makes the point-estimate-versus-uncertainty-propagation comparison a
+    # by-product of the same ensemble instead of a separate run; (b) lets any
+    # opportunity threshold tau be swept post hoc without regenerating the
+    # ensemble. The updater already computes all three dictionaries at every
+    # step, so this costs nothing beyond the CSV columns.
+    extra = {}
+    for tag, pdict in (('state', final_state_prob),
+                       ('equal', final_equal_prob),
+                       ('dist',  final_dist_prob)):
+        if "N/A" in pdict.values():
+            for key in ('O_B', 'O_L', 'F_B', 'F_L'):
+                extra[f'{key}_{tag}'] = float('nan')
+            extra[f'pL_{tag}'] = extra[f'pB_{tag}'] = ''
+            continue
+        s = compute_opportunity_scores(pdict, M_BAR_B, M_BAR_L, M_BAR_COMBINED)
+        for key in ('O_B', 'O_L', 'F_B', 'F_L'):
+            extra[f'{key}_{tag}'] = s[key]
+        ds = sorted(pdict.keys())
+        extra[f'pL_{tag}'] = _json.dumps([round(float(pdict[d][0]), 6) for d in ds])
+        extra[f'pB_{tag}'] = _json.dumps([round(float(pdict[d][1]), 6) for d in ds])
+
     return {
         **scores,
+        **extra,
         'hisp_eff': hisp_eff,
         'black_eff': black_eff,
         'distinct_eff': distinct,
@@ -1130,7 +1194,8 @@ def run_hub_chain(enacted_partition):
     accept_frac = accepted_moves / transitions
     reverr_rate = (REVERR_COUNT / PROPOSAL_COUNT) if PROPOSAL_COUNT else 0.0
     hub_assignment = dict(hub_partition.assignment)
-    print(f"  Hub reached in {time.time() - t0:.1f}s.")
+    hub_elapsed = time.time() - t0
+    print(f"  Hub reached in {hub_elapsed:.1f}s.")
     print(f"  Accepted-move fraction: {accept_frac:.3f} "
           f"({accepted_moves} moves / {transitions} steps; "
           f"REVRECOM_M={REVRECOM_M}, L_WALK={L_WALK}).")
@@ -1146,12 +1211,29 @@ def run_hub_chain(enacted_partition):
               "the spanning-tree target and the exact p-value is ill-posed. "
               "Run diagnose_and_repair_graph.py to check and repair the graph "
               "BEFORE trusting any result.")
+    # GeoSim revision: the accepted-move fraction is the quantity that makes
+    # "k = L_WALK steps" interpretable -- it converts nominal steps into
+    # realized recombination moves, which is what a reader needs in order to
+    # judge how local the hub-and-spoke comparison is.
+    hub_diagnostics = {
+        'hub_seed': hub_seed,
+        'hub_elapsed_s': hub_elapsed,
+        'hub_steps': L_HUB,
+        'hub_accepted_moves': accepted_moves,
+        'hub_accept_fraction': accept_frac,
+        'revrecom_M_bound_hit_rate': reverr_rate,
+        'frac_precincts_moved_enacted_to_hub': (
+            sum(1 for n in hub_assignment
+                if hub_assignment[n] != ENACTED_ASSIGNMENT[n]) / len(hub_assignment)
+            if ENACTED_ASSIGNMENT else float('nan')
+        ),
+    }
     if accept_frac < 0.02:
         print("  WARNING: very low accepted-move fraction. Spokes may barely "
               "leave the hub, weakening power. Consider raising REVRECOM_M "
               "and/or L_WALK (keep them fixed for the production run) -- this "
               "does not affect validity, only power.")
-    return hub_assignment
+    return hub_assignment, hub_diagnostics
 
 
 # ============================================================
@@ -1173,7 +1255,31 @@ def _spoke_worker(args):
                                               assignment=endpoint_assignment,
                                               updaters=my_updaters)
     scores = _functional_score_from_partition(endpoint_partition)
-    return {'spoke': spoke_idx, **scores}, endpoint_assignment
+
+    # GeoSim revision: locality diagnostics. `frac_moved_vs_hub` and
+    # `frac_moved_vs_enacted` are the fraction of precincts whose district
+    # label differs between this spoke and the hub / the enacted plan. They
+    # quantify how far L_SPOKE steps actually carry a plan, which is what the
+    # chain length k controls (power, not validity). cut_edges and
+    # county_splits are recorded so constraint tightening can be examined
+    # post hoc and so the compactness of the simulated ensemble can be
+    # compared to the enacted plan.
+    n_prec = len(endpoint_assignment)
+    moved_hub = sum(1 for n in endpoint_assignment
+                    if endpoint_assignment[n] != hub_assignment[n])
+    moved_enacted = (
+        sum(1 for n in endpoint_assignment
+            if endpoint_assignment[n] != ENACTED_ASSIGNMENT[n]) / n_prec
+        if ENACTED_ASSIGNMENT else float('nan')
+    )
+    diagnostics = {
+        'frac_moved_vs_hub': moved_hub / n_prec,
+        'frac_moved_vs_enacted': moved_enacted,
+        'cut_edges': len(endpoint_partition["cut_edges"]),
+        'county_splits': endpoint_partition["county_splits"]["count"],
+        'seed': seed,
+    }
+    return {'spoke': spoke_idx, **scores, **diagnostics}, endpoint_assignment
 
 
 def run_spokes(hub_assignment):
@@ -1529,9 +1635,14 @@ def save_latex_table(results, run_name):
 
 def main():
     total_start = time.time()
-    master_seed = stdlib_random.randint(0, 10**9)
+    master_seed = (MASTER_SEED if MASTER_SEED >= 0
+                   else stdlib_random.randint(0, 10**9))
     stdlib_random.seed(master_seed)
-    print(f"Master seed: {master_seed}")
+    print(f"Master seed: {master_seed} "
+          f"({'from BC_SEED' if MASTER_SEED >= 0 else 'drawn at random'})")
+    print(f"Run config: RUN_NAME={RUN_NAME}, L_WALK={L_WALK}, "
+          f"M_SPOKES={M_SPOKES}, REVRECOM_M={REVRECOM_M}, "
+          f"START_MAP={START_MAP}, MODEL_MODE={MODEL_MODE}")
 
     # 1. Score enacted map
     enacted_scores, enacted_partition = score_enacted_map()
@@ -1544,6 +1655,8 @@ def main():
     # global so editing these module constants (including to None) is always
     # picked up correctly inside main().
     ENACTED_CUT_EDGES = len(enacted_partition["cut_edges"])
+    global ENACTED_ASSIGNMENT
+    ENACTED_ASSIGNMENT = dict(enacted_partition.assignment)
     if COMPACTNESS_SLACK is not None:
         print(f"\n  Enacted cut-edges: {ENACTED_CUT_EDGES}")
         print(f"  Compactness threshold (cut-edges <= {COMPACTNESS_SLACK} x enacted): "
@@ -1565,7 +1678,7 @@ def main():
         print("  County-splits constraint disabled (COUNTY_SPLITS_SLACK = None).")
 
     # 2. Hub chain
-    hub_assignment = run_hub_chain(enacted_partition)
+    hub_assignment, hub_diagnostics = run_hub_chain(enacted_partition)
 
     # 3. Spoke chains
     spoke_df, spoke_assignments = run_spokes(hub_assignment)
@@ -1596,7 +1709,13 @@ def main():
     # frame and floods the log with pandas PerformanceWarnings at M=200.
     nodes_order = list(graph.nodes())
     enacted_assignment = dict(enacted_partition.assignment)
-    plan_columns = {"enacted": [enacted_assignment[n] for n in nodes_order]}
+    plan_columns = {
+        "enacted": [enacted_assignment[n] for n in nodes_order],
+        # GeoSim revision: the hub is saved too. Without it the realized
+        # geometry of the hub-and-spoke construction cannot be reconstructed
+        # from the artifact, and spoke-to-hub distances cannot be recomputed.
+        "hub": [hub_assignment[n] for n in nodes_order],
+    }
     for spoke_idx, assignment in sorted(spoke_assignments.items()):
         plan_columns[f"spoke_{spoke_idx:03d}"] = [assignment[n] for n in nodes_order]
     plans_df = pd.DataFrame(plan_columns, index=list(state_gdf[GEO_ID]))
@@ -1612,6 +1731,54 @@ def main():
 
     # 8. LaTeX table
     save_latex_table(results, RUN_NAME)
+
+    # 9. GeoSim revision: run-configuration record. Reviewer 2's principal
+    # objection to the submitted version was that the hub/spoke chain length
+    # was never reported; this file makes every simulation parameter, the
+    # realized acceptance behaviour of the kernel, and the runtime part of the
+    # reproducibility artifact for every run.
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True).strip()
+    except Exception:
+        commit = None
+    run_config = {
+        'run_name': RUN_NAME,
+        'master_seed': master_seed,
+        'k_walk_steps': L_WALK,
+        'L_hub': L_HUB,
+        'L_spoke': L_SPOKE,
+        'M_spokes': M_SPOKES,
+        'revrecom_M': REVRECOM_M,
+        'model_mode': MODEL_MODE,
+        'start_map': START_MAP,
+        'num_districts': NUM_DISTRICTS,
+        'pop_tol': POP_TOL,
+        'compactness_slack': COMPACTNESS_SLACK,
+        'county_splits_slack': COUNTY_SPLITS_SLACK,
+        'enacted_cut_edges': ENACTED_CUT_EDGES,
+        'enacted_county_splits': ENACTED_COUNTY_SPLITS,
+        'effectiveness_cutoff_legacy': EFFECTIVENESS_CUTOFF,
+        'n_workers': N_WORKERS,
+        'graph_vertices': graph.number_of_nodes(),
+        'graph_edges': graph.number_of_edges(),
+        'python': platform.python_version(),
+        'platform': platform.platform(),
+        'git_commit': commit,
+        'total_runtime_min': (time.time() - total_start) / 60.0,
+        **hub_diagnostics,
+        'spoke_frac_moved_vs_hub_mean': float(
+            spoke_df['frac_moved_vs_hub'].mean())
+        if 'frac_moved_vs_hub' in spoke_df else None,
+        'spoke_frac_moved_vs_enacted_mean': float(
+            spoke_df['frac_moved_vs_enacted'].mean())
+        if 'frac_moved_vs_enacted' in spoke_df else None,
+    }
+    cfg_path = DIR + f'outputs/bc_run_config_{RUN_NAME}.json'
+    with open(cfg_path, 'w') as fh:
+        _json.dump(run_config, fh, indent=2, default=str)
+    print(f"Run config saved   : {cfg_path}")
 
     print(f"\nTotal elapsed: {(time.time()-total_start)/60:.1f} minutes")
     print(f"(L_hub={L_HUB}, L_spoke={L_SPOKE}, M_spokes={M_SPOKES}, "
